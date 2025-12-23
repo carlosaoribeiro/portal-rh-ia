@@ -4,7 +4,7 @@ from PyPDF2 import PdfReader
 
 # CONFIGURAÇÃO CORRETA: O código busca o NOME da etiqueta, não o valor da chave
 if "GOOGLE_API_KEY" in st.secrets:
-    genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
+    genai.configure(api_key=st.secrets["AIzaSyD-5KX_Gu4GMuQxyWDO0xbmSe9x5nxzX20"])
 else:
     st.error("Erro: A etiqueta 'GOOGLE_API_KEY' não foi encontrada nos Secrets do Streamlit.")
     
