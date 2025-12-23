@@ -7,8 +7,8 @@ if "GOOGLE_API_KEY" in st.secrets:
     genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
 else:
     st.error("Erro: A etiqueta 'GOOGLE_API_KEY' não foi encontrada nos Secrets do Streamlit.")
-
-model = genai.GenerativeModel('gemini-1.5-flash')
+    
+model = genai.GenerativeModel('gemini-1.5-flash-latest')
 
 st.set_page_config(page_title="Portal de Carreira IA", layout="wide")
 st.title("🚀 Portal de Carreira: Gerador de CV Inteligente")
