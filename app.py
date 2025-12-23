@@ -3,11 +3,11 @@ import google.generativeai as genai
 from PyPDF2 import PdfReader
 
 # CONFIGURAÇÃO CORRETA: O código busca o NOME da etiqueta, não o valor da chave
+# MODO CORRETO: O código pede o NOME da configuração, não o valor da chave
 if "GOOGLE_API_KEY" in st.secrets:
-    genai.configure(api_key=st.secrets["AIzaSyD-5KX_Gu4GMuQxyWDO0xbmSe9x5nxzX20"])
+    genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
 else:
-    st.error("Erro: A etiqueta 'GOOGLE_API_KEY' não foi encontrada nos Secrets do Streamlit.")
-    
+    st.error("Erro: A etiqueta 'GOOGLE_API_KEY' não foi encontrada nos Secrets.")
 model = genai.GenerativeModel('gemini-1.5-flash')
 
 st.set_page_config(page_title="Portal de Carreira IA", layout="wide")
