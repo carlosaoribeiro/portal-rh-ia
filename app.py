@@ -2,15 +2,14 @@ import streamlit as st
 import google.generativeai as genai
 from PyPDF2 import PdfReader
 
-# 1. Configuração da página (DEVE ser o primeiro comando Streamlit)
 st.set_page_config(page_title="Portal de Carreira IA", layout="wide")
 
-# 2. Configuração da API com o fix para erro de conexão (transport='rest')
 if "GOOGLE_API_KEY" in st.secrets:
     genai.configure(api_key=st.secrets["GOOGLE_API_KEY"], transport='rest')
 else:
-    st.error("Erro: A etiqueta 'GOOGLE_API_KEY' não foi encontrada nos Secrets.")
+    st.error("Erro: A etiqueta 'GOOGLE_API_KEY' não foi encontrada.")
 
+# Alteração aqui: Usando 'gemini-1.5-flash' sem o sufixo ou testando 'gemini-1.5-pro'
 model = genai.GenerativeModel('gemini-1.5-flash')
 
 # 3. Interface do Usuário
