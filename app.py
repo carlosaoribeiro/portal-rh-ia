@@ -2,35 +2,60 @@ import streamlit as st
 import google.generativeai as genai
 from PyPDF2 import PdfReader
 
+# 1. Configuração da Página
 st.set_page_config(page_title="Portal de Carreira IA", layout="wide")
 
-# Configuração com transport 'rest' para evitar erros de conexão gRPC
+# 2. Configuração da API (Forçando o protocolo estável)
 if "GOOGLE_API_KEY" in st.secrets:
+    # O transport='rest' é vital para rodar no Streamlit Cloud
     genai.configure(api_key=st.secrets["GOOGLE_API_KEY"], transport='rest')
 else:
-    st.error("Chave API não configurada nos Secrets.")
+    st.error("Erro: A chave GOOGLE_API_KEY não foi encontrada nos Secrets.")
+    st.stop()
 
-# Criando o modelo - usando o nome estável
-model = genai.GenerativeModel('gemini-1.5-flash')
+# 3. Inicialização do Modelo (Usando o nome estável mais recente)
+# Se o 1.5-flash falhar, ele tentará o 1.5-pro automaticamente
+try:
+    model = genai.GenerativeModel('gemini-1.5-flash')
+except:
+    model = genai.GenerativeModel('gemini-1.5-pro')
 
 st.title("🚀 Portal de Carreira: Gerador de CV Inteligente")
 
-uploaded_file = st.file_uploader("Suba seu CV (PDF)", type="pdf")
-job_description = st.text_area("Descrição da vaga:")
+col1, col2 = st.columns(2)
 
-if st.button("Gerar CV"):
-    if uploaded_file and job_description:
-        with st.spinner('Processando...'):
-            try:
-                reader = PdfReader(uploaded_file)
-                cv_text = "".join([page.extract_text() for page in reader.pages])
-                
-                # Chamada direta
-                response = model.generate_content(
-                    f"Otimize este CV: {cv_text} para esta vaga: {job_description}"
-                )
-                st.markdown(response.text)
-                
-            except Exception as e:
-                # Se ainda der 404, o erro aparecerá aqui detalhado
-                st.error(f"Erro detalhado: {e}")
+with col1:
+    st.subheader("📁 1. Seu Currículo Mestre")
+    uploaded_file = st.file_uploader("Suba seu CV em PDF", type="pdf")
+    job_description = st.text_area("Descrição da vaga alvo:", height=250)
+
+with col2:
+    st.subheader("✨ 3. Currículo Otimizado")
+    if st.button("Gerar Currículo Otimizado"):
+        if uploaded_file and job_description:
+            with st.spinner('A IA está analisando seu currículo...'):
+                try:
+                    # Extraindo texto do PDF
+                    reader = PdfReader(uploaded_file)
+                    cv_text = ""
+                    for page in reader.pages:
+                        text = page.extract_text()
+                        if text:
+                            cv_text += text
+                    
+                    # Prompt estruturado
+                    prompt = f"Atue como um especialista em RH. Otimize meu currículo para esta vaga.\n\nCURRÍCULO:\n{cv_text}\n\nVAGA:\n{job_description}"
+                    
+                    # Chamada da API
+                    response = model.generate_content(prompt)
+                    
+                    if response.text:
+                        st.markdown(response.text)
+                    else:
+                        st.error("A IA não retornou texto. Tente novamente.")
+                        
+                except Exception as e:
+                    # Exibe o erro de forma clara para sabermos o que é
+                    st.error(f"Erro detalhado: {e}")
+        else:
+            st.warning("Por favor, preencha todos os campos (PDF e Descrição).")
