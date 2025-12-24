@@ -5,20 +5,17 @@ from PyPDF2 import PdfReader
 # 1. Configuração da Página
 st.set_page_config(page_title="Portal de Carreira IA", layout="wide")
 
-# 2. Configuração da API (Forçando o protocolo estável)
+# 2. Configuração da API
 if "GOOGLE_API_KEY" in st.secrets:
-    # O transport='rest' é vital para rodar no Streamlit Cloud
+    # transport='rest' evita erros de rede/gRPC
     genai.configure(api_key=st.secrets["GOOGLE_API_KEY"], transport='rest')
 else:
     st.error("Erro: A chave GOOGLE_API_KEY não foi encontrada nos Secrets.")
     st.stop()
 
-# 3. Inicialização do Modelo (Usando o nome estável mais recente)
-# Se o 1.5-flash falhar, ele tentará o 1.5-pro automaticamente
-try:
-    model = genai.GenerativeModel('gemini-1.5-flash')
-except:
-    model = genai.GenerativeModel('gemini-1.5-pro')
+# 3. Inicialização do Modelo
+# Usar 'gemini-1.5-flash-latest' ajuda a evitar o erro 404 da versão v1beta
+model = genai.GenerativeModel('gemini-1.5-flash-latest')
 
 st.title("🚀 Portal de Carreira: Gerador de CV Inteligente")
 
@@ -43,19 +40,30 @@ with col2:
                         if text:
                             cv_text += text
                     
+                    if not cv_text.strip():
+                        st.error("Não conseguimos ler o texto do PDF. O arquivo pode estar protegido ou vazio.")
+                        st.stop()
+                    
                     # Prompt estruturado
                     prompt = f"Atue como um especialista em RH. Otimize meu currículo para esta vaga.\n\nCURRÍCULO:\n{cv_text}\n\nVAGA:\n{job_description}"
                     
-                    # Chamada da API
+                    # Chamada da API - Aqui é onde o erro 404 acontecia
                     response = model.generate_content(prompt)
                     
+                    # Exibição do resultado
                     if response.text:
                         st.markdown(response.text)
                     else:
-                        st.error("A IA não retornou texto. Tente novamente.")
+                        st.error("A IA não retornou texto. Verifique se o conteúdo infringe as políticas de segurança.")
                         
                 except Exception as e:
-                    # Exibe o erro de forma clara para sabermos o que é
-                    st.error(f"Erro detalhado: {e}")
+                    # Caso o 1.5-flash-latest ainda dê erro, tentamos o 1.0-pro como última alternativa
+                    st.info("Tentando rota alternativa de conexão...")
+                    try:
+                        fallback_model = genai.GenerativeModel('gemini-1.0-pro')
+                        response = fallback_model.generate_content(prompt)
+                        st.markdown(response.text)
+                    except Exception as fatal_e:
+                        st.error(f"Erro ao processar com todos os modelos: {fatal_e}")
         else:
             st.warning("Por favor, preencha todos os campos (PDF e Descrição).")
