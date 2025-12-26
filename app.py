@@ -1,6 +1,6 @@
 import streamlit as st
 from google import genai
-from PyPDF2 import PdfReader
+from pypdf import PdfReader
 
 # 1. CONFIGURAÇÃO DA PÁGINA
 st.set_page_config(page_title="Portal de Carreira IA", layout="wide", page_icon="🚀")
