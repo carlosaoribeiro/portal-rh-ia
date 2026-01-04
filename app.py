@@ -6,6 +6,34 @@ from pypdf import PdfReader
 # 1) CONFIGURAÇÃO DA PÁGINA
 st.set_page_config(page_title="Portal de Carreira IA", layout="wide", page_icon="🚀")
 
+# CSS Customizado para simular o layout dos prints (Papel A4 e Timeline)
+st.markdown("""
+    <style>
+    /* Estilo do container que simula o papel do CV */
+    .cv-paper {
+        background-color: white;
+        padding: 40px;
+        border-radius: 5px;
+        border: 1px solid #d3d3d3;
+        box-shadow: 2px 2px 15px rgba(0,0,0,0.1);
+        color: #1a1a1a;
+        font-family: 'Arial', sans-serif;
+        line-height: 1.5;
+    }
+    /* Estilização para simular o cabeçalho e as linhas do SheetsResume */
+    .cv-paper h1, .cv-paper h2, .cv-paper h3 {
+        color: #000;
+        margin-bottom: 5px;
+    }
+    .stButton>button {
+        width: 100%;
+        border-radius: 5px;
+        height: 3em;
+        background-color: #f0f2f6;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
 # 2) CONEXÃO COM A API
 if "GOOGLE_API_KEY" not in st.secrets:
     st.error("Erro: Configure a chave 'GOOGLE_API_KEY' nos Secrets do Streamlit!")
@@ -37,45 +65,43 @@ col1, col2 = st.columns([1, 1.2])
 with col1:
     st.subheader("📁 Dados de Entrada")
     uploaded_file = st.file_uploader("Suba seu currículo atual (PDF)", type="pdf")
-    job_description = st.text_area("Descrição da vaga alvo:", height=300)
+    job_description = st.text_area("Descrição da vaga alvo:", height=300, placeholder="Cole os requisitos da vaga aqui...")
 
 with col2:
     st.subheader("✨ Resultado Otimizado")
-    if "result" not in st.session_state: st.session_state.result = ""
+    
+    if "result" not in st.session_state: 
+        st.session_state.result = ""
 
-    if st.button("Gerar CV no Formato Referência", use_container_width=True):
+    if st.button("Gerar CV no Formato Referência"):
         if uploaded_file and job_description.strip():
-            with st.spinner("Formatando currículo..."):
+            with st.spinner("Analisando e formatando currículo..."):
                 try:
+                    # Extração de texto
                     reader = PdfReader(uploaded_file)
                     cv_text = "".join([(p.extract_text() or "") for p in reader.pages]).strip()
 
                     lang = detect_language(job_description)
                     lang_rules = language_instructions(lang)
 
-                    # 4) PROMPT AJUSTADO PARA O FORMATO DA IMAGEM
+                    # 4) PROMPT REFINADO (Foco em Match Técnico + Layout JNG)
                     prompt = f"""
 You are an expert resume writer specialized in the "SheetsResume/JNG" professional format.
-
 {lang_rules}
 
 TASK:
-Rewrite the user's CV to match the EXACT structural style of the reference provided, optimized for the job description.
+Rewrite the CV to maximize technical match with the job description. 
+Adjust the "Work Experience" and "Projects" sections (like Oppia and Agiltec) to emphasize the specific technical keywords (e.g., MVVM, Threading, Sensors) from the job description.
 
-STRICT FORMATTING RULES (Based on reference):
-1. HEADER: Name in bold, followed by a one-line sub-headline (Job Title + Key Value). Contact info on one line separated by symbols (⬩).
-2. WORK EXPERIENCE:
-   - Company Name on the left, Dates (e.g., Oct. 2020 – Present) on the far right.
-   - Job Title on the left, Location/Remote on the far right.
-   - First bullet: A brief 1-sentence description of what the company does.
-   - Sub-bullets: Achievement-oriented, starting with strong action verbs. Highlight technical match (Kotlin, MVVM, etc.).
-3. EDUCATION: University Name (left), Graduation Date (right). Degree/Major (left), City (right).
-4. SKILLS & INTERESTS: Grouped at the bottom. Format as "Skills: Skill 1; Skill 2; Skill 3".
-
-GOLDEN RULES:
-- DO NOT use a "Summary" section (as per reference style). Start with Work Experience.
-- DO NOT mention career transition.
-- Integrate keywords from the Job Description into the bullet points.
+STRICT FORMATTING RULES (Timeline Style):
+1. NO SUMMARY: Start directly with WORK EXPERIENCE.
+2. HEADER: Name in bold. One line for sub-headline. Contact info separated by '⬩'.
+3. WORK EXPERIENCE LAYOUT:
+   - Company Name (left) | Dates (right)
+   - Title (left) | Location (right)
+   - First bullet: One-sentence context of the company.
+   - Following bullets: Technical achievements using action verbs.
+4. MATCHING: If the JD asks for a skill you have (like Coroutines), ensure it appears prominently in the most relevant experience.
 
 CV TEXT:
 {cv_text}
@@ -84,9 +110,10 @@ JOB DESCRIPTION:
 {job_description}
 
 EXPECTED OUTPUT:
-Return ONLY the [OPTIMIZED CV] in Markdown, followed by a brief [MATCH ANALYSIS] and [GAPS].
+Return ONLY the [OPTIMIZED CV] in Markdown format, followed by [MATCH ANALYSIS] and [GAPS].
 """
 
+                    # 5) CHAMADA AO MODELO
                     models_to_try = ["gemini-2.0-flash", "gemini-1.5-pro"]
                     response = None
                     for m in models_to_try:
@@ -97,10 +124,24 @@ Return ONLY the [OPTIMIZED CV] in Markdown, followed by a brief [MATCH ANALYSIS]
 
                     if response:
                         st.session_state.result = response.text
-                        st.success("✅ Currículo formatado!")
+                        st.success("✅ Currículo formatado com sucesso!")
                 except Exception as e:
                     st.error(f"Erro: {e}")
+        else:
+            st.warning("⚠️ Suba o PDF e preencha a vaga.")
 
+    # 6) EXIBIÇÃO EM "PAPEL"
     if st.session_state.result:
+        # Exibe o resultado dentro de uma div com a classe 'cv-paper' definida no CSS
+        st.markdown(f'<div class="cv-paper">', unsafe_allow_html=True)
         st.markdown(st.session_state.result)
-        st.download_button("📥 Baixar CV Ajustado", st.session_state.result, "cv_formatado.txt", use_container_width=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+        
+        st.divider()
+        st.download_button(
+            label="📥 Baixar CV Ajustado (TXT)",
+            data=st.session_state.result,
+            file_name="cv_final_jng_format.txt",
+            mime="text/plain",
+            use_container_width=True
+        )
