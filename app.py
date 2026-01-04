@@ -6,10 +6,10 @@ from pypdf import PdfReader
 # 1) CONFIGURAÇÃO DA PÁGINA
 st.set_page_config(page_title="Gerador de CV Inteligente", layout="wide", page_icon="🚀")
 
-# CSS para simular o layout SheetsResume/JNG fielmente
+# CSS para simular o layout SheetsResume/JNG e organizar a visualização vertical
 st.markdown("""
     <style>
-    /* Estilo do Papel A4 */
+    /* Estilo do Papel A4 para o resultado */
     .cv-paper {
         background-color: white;
         padding: 40px 50px;
@@ -19,7 +19,8 @@ st.markdown("""
         color: #000;
         font-family: 'Times New Roman', serif;
         width: 100%;
-        margin: auto;
+        margin-top: 20px;
+        line-height: 1.4;
     }
     /* Timeline: Empresa à esquerda, Data à direita */
     .timeline-row {
@@ -46,67 +47,103 @@ st.markdown("""
         margin-bottom: 5px;
         font-size: 1em;
     }
-    .contact-line { text-align: center; margin-bottom: 20px; font-size: 0.9em; }
-    .bullet-point { margin-left: 20px; text-indent: -20px; margin-bottom: 3px; }
+    /* Estilização para garantir que os inputs ocupem a largura total */
+    .stTextArea textarea { font-size: 16px; }
     </style>
     """, unsafe_allow_html=True)
 
 # 2) CONEXÃO API
 if "GOOGLE_API_KEY" not in st.secrets:
-    st.error("Configure GOOGLE_API_KEY nos Secrets!")
+    st.error("Erro: Configure a chave 'GOOGLE_API_KEY' nos Secrets do Streamlit!")
     st.stop()
+
 client = genai.Client(api_key=st.secrets["GOOGLE_API_KEY"])
 
 # ---------- Helpers ----------
 def detect_language(text):
     text = (text or "").lower()
-    pt_hits = len(re.findall(r"\b(de|da|o|a|com|vaga|requisitos)\b", text))
-    en_hits = len(re.findall(r"\b(the|and|with|role|requirements)\b", text))
+    pt_hits = len(re.findall(r"\b(de|da|o|a|com|vaga|requisitos|experiência|desenvolvimento)\b", text))
+    en_hits = len(re.findall(r"\b(the|and|with|role|requirements|experience|development)\b", text))
     return "pt-BR" if pt_hits > en_hits else "en"
 
-# 3) INTERFACE (Layout 2 Colunas conforme print)
+# 3) INTERFACE EM FLUXO VERTICAL (Resultado abaixo da Entrada)
 st.title("🚀 Gerador de CV Inteligente")
 st.caption("Ajuste seu currículo para o formato profissional **SheetsResume/JNG**.")
 
-col1, col2 = st.columns([1, 1.3])
+# Bloco de Entrada de Dados (Ocupando a largura total conforme solicitado)
+st.subheader("📁 Dados de Entrada")
+uploaded_file = st.file_uploader("Suba seu currículo atual (PDF)", type="pdf")
+job_description = st.text_area("Descrição da vaga alvo:", height=250, placeholder="Cole os requisitos da vaga aqui (ex: MVVM, Kotlin, Coroutines)...")
 
-with col1:
-    st.subheader("📁 Dados de Entrada")
-    uploaded_file = st.file_uploader("Suba seu currículo atual (PDF)", type="pdf")
-    job_description = st.text_area("Descrição da vaga alvo:", height=300)
+# Inicializa o estado do resultado para persistência na tela
+if "result" not in st.session_state:
+    st.session_state.result = ""
 
-with col2:
-    st.subheader("✨ Resultado Otimizado")
-    if "result" not in st.session_state: st.session_state.result = ""
-
-    if st.button("Gerar CV no Formato Referência", use_container_width=True):
-        if uploaded_file and job_description:
-            with st.spinner("Formatando linha do tempo..."):
+# Botão de Ação (Largura total abaixo dos inputs)
+if st.button("Gerar CV no Formato Referência", use_container_width=True):
+    if uploaded_file and job_description.strip():
+        with st.spinner("Analisando requisitos e formatando linha do tempo..."):
+            try:
+                # Extração segura de texto do PDF
                 reader = PdfReader(uploaded_file)
-                cv_text = "".join([p.extract_text() for p in reader.pages])
+                cv_text = ""
+                for page in reader.pages:
+                    content = page.extract_text()
+                    if content:
+                        cv_text += content
+                
+                if not cv_text.strip():
+                    st.error("Não foi possível extrair texto do PDF. O arquivo pode ser uma imagem ou estar protegido.")
+                    st.stop()
+
                 lang = detect_language(job_description)
 
-                # PROMPT: Forçando a saída em HTML para manter o alinhamento do print
+                # 4) PROMPT REFINADO PARA O LAYOUT JNG (Sem transição, foco em match técnico)
                 prompt = f"""
-                You are an expert resume writer for the "SheetsResume/JNG" style.
-                Output the resume using HTML tags ONLY for structure.
+                You are a senior tech recruiter and resume expert for the "SheetsResume/JNG" style.
+                Output the optimized resume using HTML tags ONLY for structural alignment to ensure the dates stay on the right.
                 
-                STRUCTURAL RULES:
-                1. Use <div class="timeline-row"><span>Company</span><span>Date</span></div> for all experience headers.
-                2. Use <div class="timeline-subrow"><span>Title</span><span>Location</span></div> for titles.
-                3. Use <div class="section-title">SECTION NAME</div> for headers.
-                4. No Summary. Start with WORK EXPERIENCE.
-                5. Bullet points should be concise and tech-heavy (MVVM, Kotlin, etc).
+                STRICT RULES:
+                1. HEADER: Name in Bold. Contact line with symbols '⬩'.
+                2. NO SUMMARY: Start directly with the section 'WORK EXPERIENCE'.
+                3. TIMELINE FORMAT (Mandatory HTML):
+                   - For every company: <div class="timeline-row"><span>Company Name</span><span>Dates</span></div>
+                   - For every title: <div class="timeline-subrow"><span>Job Title</span><span>Location</span></div>
+                4. SECTION TITLES: Use <div class="section-title">SECTION NAME</div>.
+                5. CONTENT MATCH: Focus on technical keywords from the job description (e.g., MVVM, Threading, Sensors). 
+                   Maintain previous roles but describe them through the lens of technical delivery and architectural collaboration.
                 
-                Language: {lang}.
-                CV: {cv_text}
-                Job: {job_description}
+                Language of the output: {lang}.
+                Original CV: {cv_text}
+                Job Description Requirements: {job_description}
                 """
                 
+                # Chamada ao motor Gemini 2.0 Flash
                 response = client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
                 st.session_state.result = response.text
+                st.success("✅ Currículo otimizado com sucesso!")
+                
+            except Exception as e:
+                st.error(f"Erro no processamento: {e}")
+    else:
+        st.warning("⚠️ Certifique-se de subir o PDF e inserir a descrição da vaga.")
 
-    if st.session_state.result:
-        # Exibição dentro do estilo de "Papel" do print
-        st.markdown(f'<div class="cv-paper">{st.session_state.result}</div>', unsafe_allow_html=True)
-        st.download_button("📥 Baixar CV Ajustado", st.session_state.result, "cv.html", use_container_width=True)
+# 5) EXIBIÇÃO DO RESULTADO (Sempre posicionado abaixo dos controles)
+if st.session_state.result:
+    st.divider()
+    st.subheader("✨ Resultado Otimizado")
+    
+    # Renderização do currículo no estilo "papel" com as classes de timeline
+    st.markdown(f'<div class="cv-paper">{st.session_state.result}</div>', unsafe_allow_html=True)
+    
+    # Opção de Download para preservar a formatação
+    st.download_button(
+        label="📥 Baixar CV Ajustado (HTML/Texto)",
+        data=st.session_state.result,
+        file_name="cv_jng_otimizado.html",
+        mime="text/html",
+        use_container_width=True
+    )
+
+st.markdown("---")
+st.caption("Ajustado para match técnico via IA. Revise os dados antes de enviar.")
