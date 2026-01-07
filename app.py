@@ -59,7 +59,6 @@ client = genai.Client(api_key=st.secrets["GOOGLE_API_KEY"])
 # =========================
 MISSING_RE = re.compile(r"^MISSING\s—\s.+", re.IGNORECASE)
 
-# ex.: Sep 2024 - Present, Aug 2021 - May 2023
 DATE_RE = re.compile(
     r"\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{4}\s*-\s*"
     r"(?:Present|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{4})\b"
@@ -96,14 +95,20 @@ def get_response_text(response) -> str:
         return ""
 
 def extract_json_loose(text: str) -> dict:
+    """
+    Extrai o PRIMEIRO objeto JSON válido da resposta.
+    Corrige o erro "Extra data" quando o modelo devolve 2 JSONs ou JSON + texto.
+    """
     text = (text or "").strip()
-    if text.startswith("{") and text.endswith("}"):
-        return json.loads(text)
+    text = re.sub(r"```(?:json)?", "", text, flags=re.IGNORECASE).strip("` \n\r\t")
+
     i = text.find("{")
-    j = text.rfind("}")
-    if i == -1 or j == -1 or j <= i:
-        raise ValueError("Resposta não contém um objeto JSON válido.")
-    return json.loads(text[i:j+1])
+    if i == -1:
+        raise ValueError("Resposta não contém um objeto JSON (não achei '{').")
+
+    decoder = json.JSONDecoder()
+    obj, _end = decoder.raw_decode(text[i:])  # pega só o 1º JSON e ignora o resto
+    return obj
 
 def achievements_to_list(achievements_raw: str) -> list[str]:
     if not achievements_raw:
@@ -165,14 +170,6 @@ def extract_phone_from_text(text: str) -> str:
     return m.group(0).strip() if m else ""
 
 def extract_cert_skills_interests(lines: list[str]) -> dict:
-    """
-    Extrai seção:
-      CERTIFICATIONS, SKILLS & INTERESTS
-    e retorna:
-      - certifications: [..]
-      - skills_raw: "..."
-      - interests: [..]
-    """
     if not lines:
         return {}
 
@@ -190,7 +187,6 @@ def extract_cert_skills_interests(lines: list[str]) -> dict:
         if not ln:
             continue
 
-        # corta se encontrar outro header em caps curto
         if len(ln) <= 40 and ln.isupper() and j > start + 1:
             break
 
@@ -234,20 +230,6 @@ def extract_cert_skills_interests(lines: list[str]) -> dict:
     }
 
 def normalize_matrix(matrix: dict) -> dict:
-    """
-    Aceita aliases:
-      - experiences (padrão)
-      - experience
-      - work_experience
-      - jobs
-
-    Normaliza:
-      - header.links (lista)
-      - header.contact_line (lista)
-      - certifications/interests (listas)
-      - skills_raw (string)
-      - achievements[] (a partir de achievements_raw)
-    """
     matrix = matrix or {}
 
     if "experiences" not in matrix:
@@ -273,7 +255,6 @@ def normalize_matrix(matrix: dict) -> dict:
     header["phone"] = str(header.get("phone", "") or "").strip()
     matrix["header"] = header
 
-    # certifications / interests
     certs = matrix.get("certifications", [])
     if isinstance(certs, str):
         certs = [certs]
@@ -338,11 +319,6 @@ def slice_experience_section(lines: list[str]) -> list[str]:
     return lines[start:end] if end else lines[start:]
 
 def parse_experiences_from_lines(lines: list[str]) -> list[dict]:
-    """
-    Parser por âncora de data:
-    - encontra DATE_RE e cria um bloco até a próxima data
-    - tenta achar title/company/location na mesma linha com '|'
-    """
     exps = []
     i = 0
     while i < len(lines):
@@ -367,19 +343,6 @@ def parse_experiences_from_lines(lines: list[str]) -> list[dict]:
                     company = parts_no_date[1]
                 if len(parts_no_date) >= 3:
                     location = parts_no_date[2]
-            else:
-                prev = lines[i - 1] if i - 1 >= 0 else ""
-                nxt = lines[i + 1] if i + 1 < len(lines) else ""
-                header_line = prev if prev and len(prev) < 120 else nxt
-                if header_line:
-                    if " - " in header_line:
-                        a = [p.strip() for p in header_line.split(" - ") if p.strip()]
-                        if len(a) >= 1:
-                            title = a[0]
-                        if len(a) >= 2:
-                            company = a[1]
-                    else:
-                        title = header_line
 
             achievements_raw = " ".join([c for c in chunk if c.strip()])
             exps.append({
@@ -392,7 +355,6 @@ def parse_experiences_from_lines(lines: list[str]) -> list[dict]:
             i = j
         else:
             i += 1
-
     return exps
 
 def parse_matrix_from_pdf(cv_text: str) -> dict:
@@ -404,7 +366,6 @@ def parse_matrix_from_pdf(cv_text: str) -> dict:
     links = extract_links_from_text(cv_text)
     phone = extract_phone_from_text(cv_text)
 
-    # Extrai cursos/certificações/skills/interests do PDF
     extras = extract_cert_skills_interests(lines)
 
     header = {
@@ -580,7 +541,6 @@ def render_cv_html(cv: dict, lang: str, show_missing: bool = True, export_clean:
     if isinstance(contact_line, str):
         contact_line = [contact_line]
 
-    # fallback de phone/links se vierem dentro do contact_line
     if not phone:
         phone = extract_phone_from_text(" ".join([str(x) for x in contact_line]))
     if not links:
@@ -639,14 +599,12 @@ def render_cv_html(cv: dict, lang: str, show_missing: bool = True, export_clean:
         html.append(f"<div class='section-title'>{L_SKILLS}</div>")
         html.append(f"<div class='experience-description'>{fmt_field(clean(join_slash(skills)), show_missing)}</div>")
 
-    # NOVO: Certifications
     if certifications:
         certs_join = " / ".join([c for c in certifications if str(c).strip()])
         if certs_join.strip():
             html.append(f"<div class='section-title'>{L_CERTS}</div>")
             html.append(f"<div class='experience-description'>{fmt_field(clean(certs_join), show_missing)}</div>")
 
-    # NOVO: Interests
     if interests:
         interests_join = " / ".join([i for i in interests if str(i).strip()])
         if interests_join.strip():
@@ -765,7 +723,6 @@ if btn_gerar:
         lang = detect_language(job_description)
         prompt = build_prompt(matrix, job_description, company_description or "", lang)
 
-        # ✅ TEXTO ALTERADO AQUI
         with st.spinner("Processando suas informações..."):
             resp = client.models.generate_content(
                 model="gemini-2.0-flash",
@@ -773,7 +730,14 @@ if btn_gerar:
             )
 
         raw = get_response_text(resp).strip()
-        data = extract_json_loose(raw)
+
+        try:
+            data = extract_json_loose(raw)
+        except Exception as e:
+            st.error(f"Erro ao interpretar JSON do modelo: {e}")
+            with st.expander("🔎 Resposta bruta do modelo (diagnóstico)"):
+                st.text(raw[:9000])
+            st.stop()
 
         cv_exps = (data.get("cv", {}) or {}).get("experience", []) or []
         output_ids = [e.get("exp_id") for e in cv_exps if e.get("exp_id")]
