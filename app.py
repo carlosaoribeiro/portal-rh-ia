@@ -11,7 +11,6 @@ from html import escape
 # =========================
 st.set_page_config(page_title="Gerador de Currículo", layout="wide", page_icon="🚀")
 
-# CSS + Roboto + Layout estilo "Imagem 2"
 CV_CSS = """
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;700&display=swap');
@@ -33,7 +32,6 @@ h1 { font-size: 26px; margin-bottom: 5px; font-weight: 700; text-align: center; 
 .contact-line { font-size: 0.95em; margin-bottom: 20px; border-bottom: 1px solid #eee; padding-bottom: 10px; text-align: center; }
 .section-title { border-bottom: 1.5px solid #000; text-transform: uppercase; font-weight: 700; margin-top: 25px; margin-bottom: 10px; font-size: 1.1em; }
 
-/* Tabelas para alinhamento Empresa/Data (Imagem 2) */
 .timeline-table { width: 100%; border-collapse: collapse; margin-top: 15px; }
 .company-name { text-align: left; font-weight: 700; font-size: 1.1em; }
 .date-range { text-align: right; font-weight: 700; font-size: 1.1em; }
@@ -43,7 +41,6 @@ h1 { font-size: 26px; margin-bottom: 5px; font-weight: 700; text-align: center; 
 .location { text-align: right; font-style: italic; color: #333; }
 
 .experience-description { text-align: justify; font-size: 10.5pt; margin-bottom: 15px; line-height: 1.5; white-space: pre-line; }
-
 .missing { color: #666; font-style: italic; text-decoration: underline; }
 </style>
 """
@@ -60,7 +57,6 @@ client = genai.Client(api_key=st.secrets["GOOGLE_API_KEY"])
 # =========================
 # 3) FUNÇÕES AUXILIARES
 # =========================
-
 MISSING_RE = re.compile(r"^MISSING\s—\s.+", re.IGNORECASE)
 DATE_RE = re.compile(r"\b[A-Z][a-z]{2}\s+\d{4}\s*-\s*(?:Present|[A-Z][a-z]{2}\s+\d{4})\b")
 
@@ -79,7 +75,6 @@ def extract_pdf_text(uploaded_file) -> str:
     return "\n".join(parts).strip()
 
 def get_response_text(response) -> str:
-    # Compatível com variações do SDK
     if hasattr(response, "text") and response.text:
         return response.text
     try:
@@ -88,14 +83,9 @@ def get_response_text(response) -> str:
         return ""
 
 def extract_json_loose(text: str) -> dict:
-    """
-    Pega JSON mesmo se o modelo vier com lixo antes/depois.
-    Recorta do primeiro { ao último }.
-    """
     text = (text or "").strip()
     if text.startswith("{") and text.endswith("}"):
         return json.loads(text)
-
     i = text.find("{")
     j = text.rfind("}")
     if i == -1 or j == -1 or j <= i:
@@ -106,7 +96,6 @@ def achievements_to_list(achievements_raw: str) -> list[str]:
     if not achievements_raw:
         return []
     parts = [p.strip(" \n\r\t-•") for p in achievements_raw.split("/") if p.strip()]
-    # dedup preservando ordem
     out, seen = [], set()
     for p in parts:
         key = p.lower()
@@ -122,11 +111,21 @@ def ensure_exp_ids(experiences: list[dict]) -> list[dict]:
 
 def normalize_matrix(matrix: dict) -> dict:
     """
-    Garante:
-    - exp_id em todas experiências
-    - achievements[] pronto (a partir de achievements_raw se necessário)
+    Aceita aliases:
+      - experiences (padrão)
+      - experience
+      - work_experience
+      - jobs
     """
     matrix = matrix or {}
+
+    # Aliases de chave
+    if "experiences" not in matrix:
+        for k in ("experience", "work_experience", "jobs"):
+            if k in matrix and isinstance(matrix.get(k), list):
+                matrix["experiences"] = matrix.get(k) or []
+                break
+
     exps = ensure_exp_ids(matrix.get("experiences", []) or [])
     for exp in exps:
         if not exp.get("achievements"):
@@ -159,10 +158,6 @@ def fmt_field(value: str, show_missing: bool = True) -> str:
     return safe
 
 def render_cv_html(cv: dict, lang: str, show_missing: bool = True, export_clean: bool = False) -> str:
-    """
-    Renderiza HTML seguindo sua estrutura "Imagem 2".
-    export_clean=True remove placeholders MISSING.
-    """
     cv = cv or {}
     header = cv.get("header", {}) or {}
     name = header.get("name", "")
@@ -174,7 +169,6 @@ def render_cv_html(cv: dict, lang: str, show_missing: bool = True, export_clean:
     education = cv.get("education", []) or []
     experience = cv.get("experience", []) or []
 
-    # labels
     if lang == "pt-BR":
         L_SUMMARY, L_SKILLS, L_EXPERIENCE, L_EDU = "Resumo", "Skills", "Experiência", "Educação"
     else:
@@ -183,7 +177,6 @@ def render_cv_html(cv: dict, lang: str, show_missing: bool = True, export_clean:
     def clean(v: str) -> str:
         return strip_missing(v) if export_clean else (v or "")
 
-    # ordena por relevância (se existir)
     def rel_key(x):
         return 0 if x.get("relevance") == "high" else 1
     experience_sorted = sorted(experience, key=rel_key)
@@ -239,19 +232,17 @@ def render_cv_html(cv: dict, lang: str, show_missing: bool = True, export_clean:
 
 def parse_matrix_from_pdf(cv_text: str) -> dict:
     """
-    Fallback simples: tenta montar matriz a partir de um PDF com texto selecionável.
-    - Detecta linhas no padrão: Title | Company | Sep 2024 - Present | Location
-    - Coleta linhas seguintes como achievements_raw até o próximo header
+    Parser simples (fallback):
+    - tenta pegar header e experiências com padrão: "Title | Company | Sep 2024 - Present | Location"
+    - se não achar, retorna experiências vazias, mas mantém raw_cv_text para o Gemini inferir.
     """
     lines = [ln.strip() for ln in (cv_text or "").splitlines() if ln.strip()]
     if not lines:
         return {}
 
-    # Tenta header básico
     name = lines[0]
     contact_line = []
     if len(lines) > 1 and ("http" in lines[1] or "+" in lines[1] or "linkedin" in lines[1].lower()):
-        # separadores comuns: • | -
         contact_line = [p.strip() for p in re.split(r"[•|]", lines[1]) if p.strip()]
 
     experiences = []
@@ -260,23 +251,17 @@ def parse_matrix_from_pdf(cv_text: str) -> dict:
         ln = lines[i]
         if " | " in ln and DATE_RE.search(ln):
             parts = [p.strip() for p in ln.split("|")]
-            # esperado: title | company | dates | location (mas pode variar)
             title = parts[0] if len(parts) > 0 else ""
             company = parts[1] if len(parts) > 1 else ""
             date_range = parts[2] if len(parts) > 2 else ""
             location = parts[3] if len(parts) > 3 else ""
 
-            # coleta texto até próximo header de experiência
             j = i + 1
             chunk = []
             while j < len(lines):
                 nxt = lines[j]
                 if " | " in nxt and DATE_RE.search(nxt):
                     break
-                # evita capturar headers genéricos
-                if nxt.lower() in {"work experience", "experience", "education", "skills"}:
-                    j += 1
-                    continue
                 chunk.append(nxt)
                 j += 1
 
@@ -292,18 +277,51 @@ def parse_matrix_from_pdf(cv_text: str) -> dict:
         else:
             i += 1
 
-    matrix = {
+    return {
         "header": {"name": name, "contact_line": contact_line},
         "summary": "",
         "experiences": experiences,
         "education": [],
-        "skills_raw": ""
+        "skills_raw": "",
+        "raw_cv_text": cv_text
     }
-    return matrix
 
 def build_prompt(matrix: dict, job_description: str, company_description: str, lang: str) -> str:
     target_lang = "pt-BR" if lang == "pt-BR" else "en-US"
+
+    matrix = matrix or {}
+    experiences = matrix.get("experiences", []) or []
+    has_matrix_exps = len(experiences) > 0
+    raw_cv_text = matrix.get("raw_cv_text", "") or ""
+
     matrix_json = json.dumps(matrix, ensure_ascii=False)
+
+    # Se NÃO tiver experiences na matriz, não faz sentido “exp_id coverage”.
+    coverage_block = ""
+    coverage_schema = ""
+    if has_matrix_exps:
+        coverage_block = """
+- CRITICAL: Do not drop experiences.
+  - The matrix contains experiences with exp_id.
+  - Your output MUST include EVERY exp_id exactly once.
+  - Do not merge, do not remove, do not invent new roles.
+  - You may reorder experiences only by relevance, but must include all items.
+"""
+        coverage_schema = """
+  ,
+  "experience_coverage": {
+    "expected_exp_ids": ["string"],
+    "output_exp_ids": ["string"],
+    "missing_exp_ids": ["string"]
+  }
+"""
+    else:
+        coverage_block = """
+- The matrix may not contain structured experiences.
+  - In that case, infer experience entries from raw_cv_text (do NOT invent new companies/dates).
+  - If dates/companies are unclear, use "MISSING — ..." and add to missing_info.
+"""
+        coverage_schema = ""
 
     return f"""
 Return ONLY a valid JSON object (no markdown, no backticks, no commentary).
@@ -313,12 +331,8 @@ Language rule:
 - If the job description is in English, write everything in en-US.
 
 Hard rules:
-- The matrix is the single source of truth. Do NOT invent companies, dates, titles, degrees, certifications, or metrics.
-- CRITICAL: Do not drop experiences.
-  - The matrix contains experiences with exp_id.
-  - Your output MUST include EVERY exp_id exactly once.
-  - Do not merge, do not remove, do not invent new roles.
-  - You may reorder experiences only by relevance, but must include all items.
+- Use the matrix as the primary source of truth. Do NOT invent companies, dates, titles, degrees, certifications, or metrics.
+{coverage_block}
 
 Missing info rule:
 - If any field is missing/unclear:
@@ -360,16 +374,14 @@ JSON schema:
       "why_it_matters": "string",
       "suggested_input_example": "string"
     }}
-  ],
-  "experience_coverage": {{
-    "expected_exp_ids": ["string"],
-    "output_exp_ids": ["string"],
-    "missing_exp_ids": ["string"]
-  }}
+  ]{coverage_schema}
 }}
 
 Authoritative input matrix (JSON):
 {matrix_json}
+
+raw_cv_text (if present; use only to infer structure when matrix lacks experiences):
+{raw_cv_text}
 
 Target job description:
 {job_description}
@@ -399,6 +411,7 @@ with center_col:
     st.subheader("3) Saída")
     show_missing = st.toggle("Mostrar 'MISSING — ...' no preview", value=True)
     export_final = st.toggle("Exportar versão FINAL (remove 'MISSING')", value=False)
+    enforce_validation = st.toggle("Bloquear se a matriz estiver inválida (experiences/exp_id)", value=False)
 
     btn_gerar = st.button("Gerar Currículo e Análise", use_container_width=True)
 
@@ -410,7 +423,8 @@ if "debug" not in st.session_state:
 def load_matrix() -> dict:
     if matrix_json_file is not None:
         raw = matrix_json_file.read().decode("utf-8")
-        return json.loads(raw)
+        m = json.loads(raw)
+        return m
 
     if matrix_pdf_file is not None:
         cv_text = extract_pdf_text(matrix_pdf_file)
@@ -432,14 +446,25 @@ if btn_gerar:
         matrix = load_matrix()
         matrix = normalize_matrix(matrix)
 
-        if not matrix.get("experiences"):
-            st.error("Sua matriz não tem experiences[]. Envie uma MATRIZ JSON com experiences ou um PDF com texto selecionável.")
-            st.stop()
+        # Validação "aberta": não bloqueia por padrão
+        has_exps = bool(matrix.get("experiences"))
+        if not has_exps:
+            msg = ("Sua matriz não tem experiences[]. Vou continuar SEM travar, mas não consigo garantir "
+                   "que todas as experiências serão respeitadas. Recomendo enviar uma MATRIZ JSON com experiences[].")
+            if enforce_validation:
+                st.error(msg)
+                st.stop()
+            else:
+                st.warning(msg)
 
-        expected_ids = [e.get("exp_id") for e in matrix["experiences"] if e.get("exp_id")]
-        if not expected_ids:
-            st.error("A matriz não tem exp_id. Gere/adicione exp_id em cada experiência.")
-            st.stop()
+        expected_ids = [e.get("exp_id") for e in (matrix.get("experiences") or []) if e.get("exp_id")]
+        if has_exps and not expected_ids:
+            msg = "Não encontrei exp_id na matriz. Vou continuar sem validação de cobertura."
+            if enforce_validation:
+                st.error(msg)
+                st.stop()
+            else:
+                st.warning(msg)
 
         lang = detect_language(job_description)
         prompt = build_prompt(matrix, job_description, company_description or "", lang)
@@ -450,26 +475,33 @@ if btn_gerar:
                 contents=prompt
             )
         raw = get_response_text(resp).strip()
-
         data = extract_json_loose(raw)
 
-        # ===== trava de cobertura (não omite experiências) =====
+        # Só valida cobertura se existir expected_ids
         cv_exps = (data.get("cv", {}) or {}).get("experience", []) or []
         output_ids = [e.get("exp_id") for e in cv_exps if e.get("exp_id")]
-        cov = validate_coverage(expected_ids, output_ids)
 
-        if cov["missing"]:
-            st.error(f"❌ O modelo omitiu experiências da matriz: {cov['missing']}")
-            with st.expander("Debug (resposta bruta)"):
-                st.text(raw[:6000])
-            st.stop()
+        if expected_ids:
+            cov = validate_coverage(expected_ids, output_ids)
+            if cov["missing"]:
+                msg = f"⚠️ O modelo omitiu experiências da matriz: {cov['missing']}"
+                if enforce_validation:
+                    st.error(msg)
+                    with st.expander("Debug (resposta bruta)"):
+                        st.text(raw[:6000])
+                    st.stop()
+                else:
+                    st.warning(msg)
 
-        if cov["extra"]:
-            st.warning(f"⚠️ O modelo retornou exp_id não existente na matriz: {cov['extra']}")
+            if cov["extra"]:
+                st.warning(f"⚠️ O modelo retornou exp_id não existente na matriz: {cov['extra']}")
+        else:
+            st.info("Validação de cobertura ignorada (sem expected_exp_ids).")
 
         st.session_state.data = data
         st.session_state.debug = {
             "lang": lang,
+            "has_experiences_in_matrix": has_exps,
             "expected_exp_ids": expected_ids,
             "output_exp_ids": output_ids,
             "raw_len": len(raw),
@@ -530,4 +562,5 @@ if st.session_state.data:
 
     with st.expander("🔎 Debug"):
         st.json(st.session_state.debug)
-        st.json(data.get("experience_coverage", {}))
+        if "experience_coverage" in data:
+            st.json(data.get("experience_coverage", {}))
