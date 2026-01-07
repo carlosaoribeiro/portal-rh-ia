@@ -5,124 +5,107 @@ from pypdf import PdfReader
 import streamlit.components.v1 as components
 
 # 1) CONFIGURAÇÃO DA PÁGINA
-st.set_page_config(page_title="Gerador de CV Inteligente", layout="wide", page_icon="🚀")
+st.set_page_config(page_title="Gerador de Currículo", layout="wide", page_icon="🚀")
 
-# ---------- CSS ESTILO JNG (ALINHADO COM A SUA IMAGEM) ----------
+# CSS COM ALINHAMENTO CENTRALIZADO
 CV_CSS = """
 <style>
-    body { background-color: #ffffff; font-family: 'Arial', sans-serif; color: #000; margin: 0; padding: 20px; }
-    .cv-paper { max-width: 850px; margin: auto; line-height: 1.4; }
-    
-    h1 { font-size: 26px; margin-bottom: 5px; font-weight: bold; }
-    .contact-line { font-size: 0.95em; margin-bottom: 20px; border-bottom: 1px solid #eee; padding-bottom: 10px; }
-
-    .section-title { 
-        border-bottom: 1.5px solid #000; 
-        text-transform: uppercase; 
-        font-weight: bold; 
-        margin-top: 25px; 
-        margin-bottom: 10px; 
-        font-size: 1.1em; 
-    }
-
-    .timeline-row { 
+    body { 
+        background-color: #f4f4f4; 
         display: flex; 
-        justify-content: space-between; 
-        font-weight: bold; 
-        font-size: 1.1em; 
-        margin-top: 15px;
+        justify-content: center; 
+        padding: 40px 0;
+        font-family: 'Arial', sans-serif;
     }
-
-    .timeline-subrow { 
-        display: flex; 
-        justify-content: space-between; 
-        font-style: italic; 
-        margin-bottom: 8px; 
-        font-size: 1em;
-        color: #333;
+    .cv-paper { 
+        background-color: #ffffff;
+        width: 850px; 
+        padding: 50px;
+        box-shadow: 0 0 15px rgba(0,0,0,0.1);
+        color: #000;
+        line-height: 1.4;
+        text-align: left; /* Conteúdo interno à esquerda, mas a folha centralizada */
     }
-
-    .experience-description {
-        text-align: justify;
-        font-size: 10.5pt;
-        margin-bottom: 15px;
-        line-height: 1.5;
-        white-space: pre-line;
-    }
+    h1 { font-size: 26px; margin-bottom: 5px; font-weight: bold; text-align: center; }
+    .contact-line { font-size: 0.95em; margin-bottom: 20px; border-bottom: 1px solid #eee; padding-bottom: 10px; text-align: center; }
+    .section-title { border-bottom: 1.5px solid #000; text-transform: uppercase; font-weight: bold; margin-top: 25px; margin-bottom: 10px; font-size: 1.1em; }
+    .timeline-row { display: flex; justify-content: space-between; font-weight: bold; font-size: 1.1em; margin-top: 15px; }
+    .timeline-subrow { display: flex; justify-content: space-between; font-style: italic; margin-bottom: 8px; font-size: 1em; color: #333; }
+    .experience-description { text-align: justify; font-size: 10.5pt; margin-bottom: 15px; line-height: 1.5; white-space: pre-line; }
 </style>
 """
 
-# 2) CONEXÃO API GEMINI
+# 2) CONEXÃO API
 if "GOOGLE_API_KEY" not in st.secrets:
-    st.error("Erro: Configure a chave 'GOOGLE_API_KEY' nos Secrets do Streamlit!")
+    st.error("Configure a chave 'GOOGLE_API_KEY' nos Secrets!")
     st.stop()
-
 client = genai.Client(api_key=st.secrets["GOOGLE_API_KEY"])
 
-# ---------- HELPERS ----------
 def detect_language(text):
     text = (text or "").lower()
-    pt_hits = len(re.findall(r"\b(de|da|o|a|com|vaga|requisitos|experiência|desenvolvimento)\b", text))
-    return "pt-BR" if pt_hits > 3 else "en"
+    pt_hits = len(re.findall(r"\b(vaga|requisitos|experiência|responsabilidades|conhecimento)\b", text))
+    return "pt-BR" if pt_hits > 2 else "en"
 
-# 3) INTERFACE PRINCIPAL
-st.title("🚀 Gerador de CV Inteligente")
-st.caption("Ajuste seu currículo para o formato profissional **SheetsResume/JNG**.")
+# 3) INTERFACE
+st.markdown("<h1 style='text-align: center;'>🚀 Gerador de Currículo Inteligente</h1>", unsafe_allow_html=True)
 
-col1, col2 = st.columns([1, 1])
+# Layout de colunas centralizado
+_, center_col, _ = st.columns([1, 2, 1])
 
-with col1:
-    st.subheader("📁 Dados de Entrada")
+with center_col:
     uploaded_file = st.file_uploader("Suba seu currículo atual (PDF)", type="pdf")
-    job_description = st.text_area("Descrição da vaga alvo:", height=250, placeholder="Cole os requisitos da vaga aqui...")
+    job_description = st.text_area("Descrição da vaga alvo:", height=200)
 
-if "full_response" not in st.session_state:
-    st.session_state.full_response = ""
+if "content" not in st.session_state:
+    st.session_state.content = ""
 
-# Botão de Ação
-if st.button("Gerar CV e Análise no Formato Referência", use_container_width=True):
+if st.button("Gerar Currículo e Análise", use_container_width=True):
     if uploaded_file and job_description.strip():
-        st.session_state.full_response = "" # Limpeza inicial
-        
-        with st.spinner("Analisando e formatando currículo..."):
+        st.session_state.content = ""
+        with st.spinner("Processando..."):
             try:
-                # Extração de Texto do PDF
                 reader = PdfReader(uploaded_file)
                 cv_text = "".join([p.extract_text() for p in reader.pages if p.extract_text()])
                 lang = detect_language(job_description)
-                target_lang = "PORTUGUÊS (Brasil)" if lang == "pt-BR" else "ENGLISH (US)"
+                target_lang = "PORTUGUÊS" if lang == "pt-BR" else "ENGLISH"
 
-                # PROMPT RIGOROSO PARA ALINHAMENTO VISUAL
                 prompt = f"""
-                You are a senior tech recruiter. Generate a response in {target_lang}.
+                Gere um currículo e uma análise em {target_lang}.
+                REGRAS:
+                1. Use [CV_START] e [CV_END] para o HTML.
+                2. Use [ANALYSIS_START] e [ANALYSIS_END] para a análise.
+                3. No HTML:
+                   - Empresa e data na mesma linha (<div class="timeline-row">). [cite: 16]
+                   - Cargo e localização abaixo (<div class="timeline-subrow">). [cite: 16]
+                   - Descrição como texto corrido, separando itens por "/", sem listas de bolinhas. [cite: 19]
+                4. Na análise: inclua seções "O que está melhor", "O que melhorar" e "Perguntas de entrevista". [cite: 26, 27, 32, 62]
                 
-                STRUCTURE RULES:
-                1. Return exactly two blocks: [CV_START] (HTML) [CV_END] and [ANALYSIS_START] (Markdown) [ANALYSIS_END].
-                2. In the CV (HTML):
-                   - Use <h1><b>Name</b></h1>.
-                   - Use <div class="section-title">SECTION TITLE</div>.
-                   - For each job:
-                     <div class="timeline-row"><span>Company Name</span><span>Date (e.g., Sep 2024 – Present)</span></div>
-                     <div class="timeline-subrow"><span>Job Title</span><span>Location (e.g., Texas, USA (Remote))</span></div>
-                     <div class="experience-description">A single paragraph of text. Separate achievements with "/" instead of bullets.</div>
-                3. In the Analysis (Markdown):
-                   - Include "O que está melhor", "O que melhorar", "Pontos fortes" and "Perguntas de entrevista".
-                
-                JOB DESCRIPTION: {job_description}
-                CV DATA: {cv_text}
+                DADOS: {cv_text}
+                VAGA: {job_description}
                 """
-                
                 response = client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
-                st.session_state.full_response = response.text
+                st.session_state.content = response.text
                 st.rerun()
-                
             except Exception as e:
-                st.error(f"Erro ao processar: {e}")
+                st.error(f"Erro: {e}")
 
-# 4) EXIBIÇÃO DOS RESULTADOS
-if st.session_state.full_response:
-    res = st.session_state.full_response
+# 4) EXIBIÇÃO CENTRALIZADA
+if st.session_state.content:
+    cv_match = re.search(r"\[CV_START\](.*?)\[CV_END\]", st.session_state.content, re.DOTALL)
+    analysis_match = re.search(r"\[ANALYSIS_START\](.*?)\[ANALYSIS_END\]", st.session_state.content, re.DOTALL)
     
-    # Extração via Regex
-    cv_match = re.search(r"\[CV_START\](.*?)\[CV_END\]", res, re.DOTALL)
-    analysis_match = re.search(r"\[ANALYSIS_START\](.*?)\[ANALYSIS_END\]", res, re.DOTALL)
+    if cv_match:
+        st.divider()
+        clean_html = cv_match.group(1).replace("```html", "").replace("```", "").strip()
+        full_display = f"<html><head>{CV_CSS}</head><body><div class='cv-paper'>{clean_html}</div></body></html>"
+        components.html(full_display, height=1000, scrolling=True)
+
+        if st.button("📝 Exportar para Google Docs", use_container_width=True):
+            st.info("Esta funcionalidade exportará o conteúdo para o seu Drive assim que as credenciais forem configuradas. ")
+
+    if analysis_match:
+        _, a_col, _ = st.columns([1, 2, 1])
+        with a_col:
+            st.divider()
+            st.subheader("📊 Preparação para Entrevista")
+            st.markdown(analysis_match.group(1).strip())
