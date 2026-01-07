@@ -3,32 +3,15 @@ import streamlit as st
 from google import genai
 from pypdf import PdfReader
 import streamlit.components.v1 as components
-from io import BytesIO
-from docx import Document
-from docx.shared import Pt
 
 # 1) CONFIGURAÇÃO DA PÁGINA
 st.set_page_config(page_title="Gerador de Currículo", layout="wide", page_icon="🚀")
 
-# CSS COM ALINHAMENTO CENTRALIZADO
+# CSS CENTRALIZADO E LAYOUT DE BLOCO (ESTILO JNG)
 CV_CSS = """
 <style>
-    body { 
-        background-color: #f4f4f4; 
-        display: flex; 
-        justify-content: center; 
-        padding: 40px 0;
-        font-family: 'Arial', sans-serif;
-    }
-    .cv-paper { 
-        background-color: #ffffff;
-        width: 850px; 
-        padding: 50px;
-        box-shadow: 0 0 15px rgba(0,0,0,0.1);
-        color: #000;
-        line-height: 1.4;
-        text-align: left;
-    }
+    body { background-color: #f4f4f4; display: flex; justify-content: center; padding: 40px 0; font-family: 'Arial', sans-serif; }
+    .cv-paper { background-color: #ffffff; width: 850px; padding: 50px; box-shadow: 0 0 15px rgba(0,0,0,0.1); color: #000; line-height: 1.4; text-align: left; }
     h1 { font-size: 26px; margin-bottom: 5px; font-weight: bold; text-align: center; }
     .contact-line { font-size: 0.95em; margin-bottom: 20px; border-bottom: 1px solid #eee; padding-bottom: 10px; text-align: center; }
     .section-title { border-bottom: 1.5px solid #000; text-transform: uppercase; font-weight: bold; margin-top: 25px; margin-bottom: 10px; font-size: 1.1em; }
@@ -48,25 +31,6 @@ def detect_language(text):
     text = (text or "").lower()
     pt_hits = len(re.findall(r"\b(vaga|requisitos|experiência|responsabilidades|conhecimento)\b", text))
     return "pt-BR" if pt_hits > 2 else "en"
-
-# --- FUNÇÃO PARA GERAR O ARQUIVO .DOCX ---
-def generate_docx(html_content):
-    doc = Document()
-    
-    # Limpeza básica de tags para o Word
-    # Remove tags HTML e tenta manter uma estrutura mínima
-    clean_text = re.sub('<[^<]+?>', '', html_content)
-    
-    section = doc.sections[0]
-    paragraph = doc.add_paragraph(clean_text)
-    run = paragraph.runs[0]
-    run.font.name = 'Arial'
-    run.font.size = Pt(11)
-    
-    buffer = BytesIO()
-    doc.save(buffer)
-    buffer.seek(0)
-    return buffer
 
 # 3) INTERFACE
 st.markdown("<h1 style='text-align: center;'>🚀 Gerador de Currículo Inteligente</h1>", unsafe_allow_html=True)
@@ -110,7 +74,7 @@ if st.button("Gerar Currículo e Análise", use_container_width=True):
             except Exception as e:
                 st.error(f"Erro: {e}")
 
-# 4) EXIBIÇÃO CENTRALIZADA
+# 4) EXIBIÇÃO E EXPORTAÇÃO
 if st.session_state.content:
     cv_match = re.search(r"\[CV_START\](.*?)\[CV_END\]", st.session_state.content, re.DOTALL)
     analysis_match = re.search(r"\[ANALYSIS_START\](.*?)\[ANALYSIS_END\]", st.session_state.content, re.DOTALL)
@@ -119,24 +83,18 @@ if st.session_state.content:
         st.divider()
         clean_html = cv_match.group(1).replace("```html", "").replace("```", "").strip()
         full_display = f"<html><head>{CV_CSS}</head><body><div class='cv-paper'>{clean_html}</div></body></html>"
+        
+        # Visualização no Streamlit
         components.html(full_display, height=1000, scrolling=True)
 
-        # --- NOVOS BOTÕES DE EXPORTAÇÃO ---
-        col_btn1, col_btn2 = st.columns(2)
-        
-        with col_btn1:
-            docx_file = generate_docx(clean_html)
-            st.download_button(
-                label="📥 Baixar em Formato .docx",
-                data=docx_file,
-                file_name="Curriculo_Otimizado.docx",
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                use_container_width=True
-            )
-            
-        with col_btn2:
-            if st.button("📝 Exportar para Google Docs", use_container_width=True):
-                st.info("Esta funcionalidade exportará para o Drive via API assim que as credenciais forem configuradas.")
+        # BOTÃO DE EXPORTAÇÃO (Formato compatível com Word/Google Docs)
+        st.download_button(
+            label="📥 Baixar para Editar (Word/Google Docs)",
+            data=full_display,
+            file_name="Curriculo_Otimizado.doc",
+            mime="application/msword",
+            use_container_width=True
+        )
 
     if analysis_match:
         _, a_col, _ = st.columns([1, 2, 1])
