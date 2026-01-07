@@ -5,7 +5,7 @@ from pypdf import PdfReader
 import streamlit.components.v1 as components
 
 # 1) CONFIGURAÇÃO DA PÁGINA
-st.set_page_config(page_title="Gerador de Currículo", layout="wide", page_icon="🚀")
+st.set_page_config(page_title="Gerador de CV", layout="wide", page_icon="🚀")
 
 # CSS COM FONTE ROBOTO E ALINHAMENTO DA IMAGEM 2
 CV_CSS = """
