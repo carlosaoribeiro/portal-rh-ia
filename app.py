@@ -58,7 +58,12 @@ client = genai.Client(api_key=st.secrets["GOOGLE_API_KEY"])
 # 3) FUNÇÕES AUXILIARES
 # =========================
 MISSING_RE = re.compile(r"^MISSING\s—\s.+", re.IGNORECASE)
-DATE_RE = re.compile(r"\b[A-Z][a-z]{2}\s+\d{4}\s*-\s*(?:Present|[A-Z][a-z]{2}\s+\d{4})\b")
+
+# ex.: Sep 2024 - Present, Aug 2021 - May 2023
+DATE_RE = re.compile(r"\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{4}\s*-\s*(?:Present|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{4})\b")
+
+SECTION_START_RE = re.compile(r"^(work experience|experience|professional experience)$", re.IGNORECASE)
+SECTION_END_RE = re.compile(r"^(education|skills|certifications|projects|languages|interests)$", re.IGNORECASE)
 
 def detect_language(text: str) -> str:
     text = (text or "").lower()
@@ -109,6 +114,71 @@ def ensure_exp_ids(experiences: list[dict]) -> list[dict]:
         exp.setdefault("exp_id", f"exp_{i:02d}")
     return experiences
 
+def normalize_links(urls: list[str]) -> list[str]:
+    out = []
+    seen = set()
+    for u in (urls or []):
+        u = (u or "").strip()
+        if not u:
+            continue
+
+        # remove pontuação final comum
+        u = u.rstrip(").,;]}>\"'")
+
+        # completa esquema se vier como www....
+        if u.startswith("www."):
+            u = "https://" + u
+
+        # se tiver linkedin/github sem schema mas com domínio
+        if u.startswith("linkedin.com") or u.startswith("github.com"):
+            u = "https://" + u
+
+        # valida mínima
+        if not (u.startswith("http://") or u.startswith("https://")):
+            continue
+
+        key = u.lower()
+        if key not in seen:
+            out.append(u)
+            seen.add(key)
+    return out
+
+def extract_links_from_text(text: str) -> list[str]:
+    """
+    Extrai links mesmo quando PDF quebra a URL.
+    - Junta linhas
+    - Corrige espaços depois de https://
+    - Captura http(s):// e também www., linkedin.com, github.com
+    """
+    if not text:
+        return []
+
+    # Corrige alguns padrões comuns de quebra/espaço
+    t = text.replace("https ://", "https://").replace("http ://", "http://")
+    t = re.sub(r"(https?://)\s+", r"\1", t)   # remove espaço depois de https://
+    t = t.replace("\n", " ")                 # junta linhas (ajuda URL quebrada)
+    t = re.sub(r"\s+", " ", t)
+
+    urls = []
+
+    # 1) links com esquema
+    for u in re.findall(r"https?://[^\s]+", t):
+        urls.append(u)
+
+    # 2) links sem esquema: www., linkedin.com, github.com
+    for u in re.findall(r"\b(?:www\.[^\s]+|linkedin\.com/[^\s]+|github\.com/[^\s]+)\b", t, flags=re.IGNORECASE):
+        urls.append(u)
+
+    return normalize_links(urls)
+
+def extract_phone_from_text(text: str) -> str:
+    if not text:
+        return ""
+    t = text.replace("\n", " ")
+    # procura algo tipo +1 (346) - 637-9674
+    m = re.search(r"\+\d[\d\s\(\)\-\.]{7,}", t)
+    return m.group(0).strip() if m else ""
+
 def normalize_matrix(matrix: dict) -> dict:
     """
     Aceita aliases:
@@ -116,6 +186,11 @@ def normalize_matrix(matrix: dict) -> dict:
       - experience
       - work_experience
       - jobs
+
+    Normaliza:
+      - header.links (lista)
+      - header.contact_line (lista)
+      - achievements[] (a partir de achievements_raw)
     """
     matrix = matrix or {}
 
@@ -131,17 +206,24 @@ def normalize_matrix(matrix: dict) -> dict:
         matrix["header"] = {}
 
     header = matrix["header"]
-    # normaliza links como lista
-    links = header.get("links", [])
-    if isinstance(links, str):
-        links = [links]
-    header["links"] = [str(x).strip() for x in (links or []) if str(x).strip()]
 
     # normaliza contact_line
     cl = header.get("contact_line", [])
     if isinstance(cl, str):
         cl = [cl]
     header["contact_line"] = [str(x).strip() for x in (cl or []) if str(x).strip()]
+
+    # normaliza links
+    links = header.get("links", [])
+    if isinstance(links, str):
+        links = [links]
+    header["links"] = normalize_links([str(x).strip() for x in (links or [])])
+
+    # phone
+    if "phone" in header and header["phone"]:
+        header["phone"] = str(header["phone"]).strip()
+    else:
+        header["phone"] = str(header.get("phone", "") or "").strip()
 
     matrix["header"] = header
 
@@ -187,29 +269,19 @@ def render_cv_html(cv: dict, lang: str, show_missing: bool = True, export_clean:
 
     name = header.get("name", "") or ""
 
-    # NOVO: phone + links (preferencial)
     phone = header.get("phone", "") or ""
     links = header.get("links", []) or []
 
-    # compatibilidade: contact_line pode ter phone/links
     contact_line = header.get("contact_line", []) or []
     if isinstance(contact_line, str):
         contact_line = [contact_line]
 
-    # tenta pegar phone do contact_line se vazio
+    # tenta pegar phone/links do contact_line se não vierem estruturados
     if not phone:
-        for item in contact_line:
-            if re.search(r"\+\d", str(item)):
-                phone = str(item).strip()
-                break
+        phone = extract_phone_from_text(" ".join([str(x) for x in contact_line]))
 
-    # tenta pegar links do contact_line se vazio
     if not links:
-        for item in contact_line:
-            for u in re.findall(r"https?://\S+", str(item)):
-                u = u.strip().rstrip(").,;")
-                if u not in links:
-                    links.append(u)
+        links = extract_links_from_text(" ".join([str(x) for x in contact_line]))
 
     summary = cv.get("summary", "") or ""
     skills = cv.get("skills", []) or []
@@ -231,12 +303,11 @@ def render_cv_html(cv: dict, lang: str, show_missing: bool = True, export_clean:
     html = []
     html.append(f"<h1>{fmt_field(clean(name), show_missing)}</h1>")
 
-    # Linha 1: phone
-    # Linha 2: links
     contact_rows = []
     if phone:
         contact_rows.append(fmt_field(clean(phone), show_missing))
 
+    links = normalize_links(links)
     if links:
         link_html = " | ".join([
             f"<a href='{escape(u)}' target='_blank'>{escape(u)}</a>"
@@ -245,7 +316,7 @@ def render_cv_html(cv: dict, lang: str, show_missing: bool = True, export_clean:
         if link_html.strip():
             contact_rows.append(link_html)
 
-    # fallback: se não tem phone/links mas tem contact_line
+    # fallback final se nada veio
     if not contact_rows and contact_line:
         fallback = " | ".join([escape(str(x)) for x in contact_line if str(x).strip()])
         if fallback.strip():
@@ -298,64 +369,87 @@ def render_cv_html(cv: dict, lang: str, show_missing: bool = True, export_clean:
 
     return "\n".join(html)
 
-def parse_matrix_from_pdf(cv_text: str) -> dict:
+def slice_experience_section(lines: list[str]) -> list[str]:
     """
-    Fallback melhorado:
-    - pega nome (linha 1)
-    - tenta pegar phone e URLs nas primeiras 20 linhas
-    - tenta parsear experiências se tiver "Title | Company | DateRange | Location"
-    - se não achar experiences, segue com raw_cv_text para o Gemini inferir (sem inventar)
+    Tenta recortar apenas a seção de experiência para melhorar o parser.
     """
-    lines = [ln.strip() for ln in (cv_text or "").splitlines() if ln.strip()]
     if not lines:
-        return {}
+        return lines
 
-    name = lines[0]
-    top = lines[:20]
-    links = []
-    phone = ""
+    start = None
+    for i, ln in enumerate(lines):
+        if SECTION_START_RE.match(ln.strip()):
+            start = i + 1
+            break
 
-    for ln in top:
-        found_urls = re.findall(r"https?://\S+", ln)
-        for u in found_urls:
-            u = u.strip().rstrip(").,;")
-            if u not in links:
-                links.append(u)
+    if start is None:
+        return lines  # sem header, usa tudo
 
-        if not phone and re.search(r"\+\d", ln):
-            m = re.search(r"\+\d[\d\s\(\)\-\.]{7,}", ln)
-            if m:
-                phone = m.group(0).strip()
+    end = None
+    for j in range(start, len(lines)):
+        if SECTION_END_RE.match(lines[j].strip()):
+            end = j
+            break
 
-    header = {
-        "name": name,
-        "phone": phone,
-        "links": links,
-        "contact_line": []  # compatibilidade
-    }
+    return lines[start:end] if end else lines[start:]
 
-    experiences = []
+def parse_experiences_from_lines(lines: list[str]) -> list[dict]:
+    """
+    Parser por âncora de data:
+    - quando encontra uma linha com DATE_RE, cria um bloco até a próxima data
+    - tenta obter title/company/location na mesma linha (se tiver "|") ou nas linhas próximas
+    """
+    exps = []
     i = 0
     while i < len(lines):
         ln = lines[i]
-        if " | " in ln and DATE_RE.search(ln):
-            parts = [p.strip() for p in ln.split("|")]
-            title = parts[0] if len(parts) > 0 else ""
-            company = parts[1] if len(parts) > 1 else ""
-            date_range = parts[2] if len(parts) > 2 else ""
-            location = parts[3] if len(parts) > 3 else ""
 
+        if DATE_RE.search(ln):
+            # coleta bloco até próxima data
             j = i + 1
             chunk = []
-            while j < len(lines):
-                nxt = lines[j]
-                if " | " in nxt and DATE_RE.search(nxt):
-                    break
-                chunk.append(nxt)
+            while j < len(lines) and not DATE_RE.search(lines[j]):
+                chunk.append(lines[j])
                 j += 1
 
-            achievements_raw = " ".join(chunk)
-            experiences.append({
+            # heurística: tentar parsear "Title | Company | DateRange | Location" ou variações
+            title = company = location = ""
+            date_range = DATE_RE.search(ln).group(0).strip()
+
+            if "|" in ln:
+                parts = [p.strip() for p in ln.split("|") if p.strip()]
+                # remove a parte do date_range do array
+                # geralmente: title, company, date_range, location
+                # mas pode variar, então tenta mapear:
+                # pega tudo exceto o item que contém date_range
+                parts_no_date = [p for p in parts if date_range not in p]
+                # tenta inferir
+                if len(parts_no_date) >= 1:
+                    title = parts_no_date[0]
+                if len(parts_no_date) >= 2:
+                    company = parts_no_date[1]
+                if len(parts_no_date) >= 3:
+                    location = parts_no_date[2]
+            else:
+                # sem '|': usa linha anterior como header possível
+                prev = lines[i - 1] if i - 1 >= 0 else ""
+                nxt = lines[i + 1] if i + 1 < len(lines) else ""
+                # tenta dividir por " - " ou " • " ou " / "
+                header_line = prev if prev and len(prev) < 120 else nxt
+                if header_line:
+                    # tentativas simples
+                    if " - " in header_line:
+                        a = [p.strip() for p in header_line.split(" - ") if p.strip()]
+                        if len(a) >= 1:
+                            title = a[0]
+                        if len(a) >= 2:
+                            company = a[1]
+                    else:
+                        # última tentativa: separar por espaço
+                        title = header_line
+
+            achievements_raw = " ".join([c for c in chunk if c.strip()])
+            exps.append({
                 "company": company,
                 "date_range": date_range,
                 "title": title,
@@ -366,6 +460,36 @@ def parse_matrix_from_pdf(cv_text: str) -> dict:
         else:
             i += 1
 
+    return exps
+
+def parse_matrix_from_pdf(cv_text: str) -> dict:
+    """
+    PDF -> matriz:
+    - header: name (linha 1), phone + links extraídos do texto inteiro (robusto)
+    - experiences: tenta recortar seção e parsear por âncora de data
+    - mantém raw_cv_text sempre (fallback para o Gemini)
+    """
+    lines = [ln.strip() for ln in (cv_text or "").splitlines() if ln.strip()]
+    if not lines:
+        return {}
+
+    name = lines[0]
+
+    # Links/telefone robustos: varre o TEXTO inteiro (não só top 20)
+    links = extract_links_from_text(cv_text)
+    phone = extract_phone_from_text(cv_text)
+
+    header = {
+        "name": name,
+        "phone": phone,
+        "links": links,
+        "contact_line": []
+    }
+
+    # Experiências: tenta trabalhar só na seção
+    exp_lines = slice_experience_section(lines)
+    experiences = parse_experiences_from_lines(exp_lines)
+
     return {
         "header": header,
         "summary": "",
@@ -374,6 +498,27 @@ def parse_matrix_from_pdf(cv_text: str) -> dict:
         "skills_raw": "",
         "raw_cv_text": cv_text
     }
+
+def analysis_sections(lang: str) -> str:
+    if lang == "pt-BR":
+        return """
+analysis_md must be Markdown and MUST include these sections with bullet points:
+
+## Resumo de Aderência (3 bullets)
+## Principais Forças (5 bullets)
+## Lacunas / Informações Faltantes (bullets; referencie missing_info)
+## Preparação para Entrevista (10 bullets: pergunta + resposta sugerida)
+## Cobertura de Palavras-chave (10 keywords da vaga + onde aparecem no CV)
+""".strip()
+    return """
+analysis_md must be Markdown and MUST include these sections with bullet points:
+
+## Fit Summary (3 bullets)
+## Key Strengths (5 bullets)
+## Gaps / Missing Info (bullets; reference missing_info)
+## Interview Prep (10 bullets: question + suggested answer)
+## Keyword Coverage (10 keywords from the job description + where they appear)
+""".strip()
 
 def build_prompt(matrix: dict, job_description: str, company_description: str, lang: str) -> str:
     target_lang = "pt-BR" if lang == "pt-BR" else "en-US"
@@ -417,6 +562,7 @@ Return ONLY a valid JSON object (no markdown, no backticks, no commentary).
 Language rule:
 - If the job description is in Portuguese, write everything in pt-BR.
 - If the job description is in English, write everything in en-US.
+- analysis_md must be written in the SAME language.
 
 Hard rules:
 - Use the matrix as the primary source of truth. Do NOT invent companies, dates, titles, degrees, certifications, or metrics.
@@ -430,8 +576,12 @@ Missing info rule:
   (b) add an entry to missing_info with field path, why it matters, and an example input.
 - Keep missing_info <= 10 items (most important only).
 
-Use simple, direct wording. Avoid buzzword stuffing.
-Achievements: 3–6 per role, one line each, impact-focused, tailored to job keywords.
+Style:
+- Use simple, direct wording.
+- Avoid buzzword stuffing.
+- Achievements: 3–6 per role, one line each, impact-focused, tailored to job keywords.
+
+{analysis_sections(lang)}
 
 JSON schema:
 {{
@@ -504,6 +654,7 @@ with center_col:
     show_missing = st.toggle("Mostrar 'MISSING — ...' no preview", value=True)
     export_final = st.toggle("Exportar versão FINAL (remove 'MISSING')", value=False)
     enforce_validation = st.toggle("Bloquear se a matriz estiver inválida (experiences/exp_id)", value=False)
+    show_debug = st.toggle("Mostrar Debug", value=False)
 
     btn_gerar = st.button("Gerar Currículo e Análise", use_container_width=True)
 
@@ -537,7 +688,6 @@ if btn_gerar:
         matrix = load_matrix()
         matrix = normalize_matrix(matrix)
 
-        # Validação "aberta": não bloqueia por padrão
         has_exps = bool(matrix.get("experiences"))
         if not has_exps:
             msg = ("Sua matriz não tem experiences[]. Vou continuar SEM travar, mas não consigo garantir "
@@ -568,7 +718,6 @@ if btn_gerar:
         raw = get_response_text(resp).strip()
         data = extract_json_loose(raw)
 
-        # Só valida cobertura se existir expected_ids
         cv_exps = (data.get("cv", {}) or {}).get("experience", []) or []
         output_ids = [e.get("exp_id") for e in cv_exps if e.get("exp_id")]
 
@@ -578,8 +727,9 @@ if btn_gerar:
                 msg = f"⚠️ O modelo omitiu experiências da matriz: {cov['missing']}"
                 if enforce_validation:
                     st.error(msg)
-                    with st.expander("Debug (resposta bruta)"):
-                        st.text(raw[:6000])
+                    if show_debug:
+                        with st.expander("Debug (resposta bruta)"):
+                            st.text(raw[:6000])
                     st.stop()
                 else:
                     st.warning(msg)
@@ -596,6 +746,8 @@ if btn_gerar:
             "expected_exp_ids": expected_ids,
             "output_exp_ids": output_ids,
             "raw_len": len(raw),
+            "matrix_header_links": (matrix.get("header", {}) or {}).get("links", []),
+            "matrix_header_phone": (matrix.get("header", {}) or {}).get("phone", ""),
         }
 
     except Exception as e:
@@ -651,7 +803,8 @@ if st.session_state.data:
             if ex:
                 st.caption(f"Exemplo: {ex}")
 
-    with st.expander("🔎 Debug"):
-        st.json(st.session_state.debug)
-        if "experience_coverage" in data:
-            st.json(data.get("experience_coverage", {}))
+    if show_debug:
+        with st.expander("🔎 Debug"):
+            st.json(st.session_state.debug)
+            if "experience_coverage" in data:
+                st.json(data.get("experience_coverage", {}))
