@@ -55,16 +55,24 @@ if "GOOGLE_API_KEY" not in st.secrets:
 client = genai.Client(api_key=st.secrets["GOOGLE_API_KEY"])
 
 # =========================
-# 3) FUNÇÕES AUXILIARES
+# 3) REGEX / CONSTANTES
 # =========================
 MISSING_RE = re.compile(r"^MISSING\s—\s.+", re.IGNORECASE)
 
 # ex.: Sep 2024 - Present, Aug 2021 - May 2023
-DATE_RE = re.compile(r"\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{4}\s*-\s*(?:Present|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{4})\b")
+DATE_RE = re.compile(
+    r"\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{4}\s*-\s*"
+    r"(?:Present|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{4})\b"
+)
 
 SECTION_START_RE = re.compile(r"^(work experience|experience|professional experience)$", re.IGNORECASE)
 SECTION_END_RE = re.compile(r"^(education|skills|certifications|projects|languages|interests)$", re.IGNORECASE)
 
+CERT_SECTION_RE = re.compile(r"^certifications,\s*skills\s*&\s*interests$", re.IGNORECASE)
+
+# =========================
+# 4) HELPERS
+# =========================
 def detect_language(text: str) -> str:
     text = (text or "").lower()
     pt_hits = len(re.findall(r"\b(vaga|requisitos|experi[eê]ncia|responsabilidades|conhecimento)\b", text))
@@ -115,25 +123,18 @@ def ensure_exp_ids(experiences: list[dict]) -> list[dict]:
     return experiences
 
 def normalize_links(urls: list[str]) -> list[str]:
-    out = []
-    seen = set()
+    out, seen = [], set()
     for u in (urls or []):
         u = (u or "").strip()
         if not u:
             continue
-
-        # remove pontuação final comum
         u = u.rstrip(").,;]}>\"'")
 
-        # completa esquema se vier como www....
         if u.startswith("www."):
             u = "https://" + u
-
-        # se tiver linkedin/github sem schema mas com domínio
         if u.startswith("linkedin.com") or u.startswith("github.com"):
             u = "https://" + u
 
-        # valida mínima
         if not (u.startswith("http://") or u.startswith("https://")):
             continue
 
@@ -144,40 +145,93 @@ def normalize_links(urls: list[str]) -> list[str]:
     return out
 
 def extract_links_from_text(text: str) -> list[str]:
-    """
-    Extrai links mesmo quando PDF quebra a URL.
-    - Junta linhas
-    - Corrige espaços depois de https://
-    - Captura http(s):// e também www., linkedin.com, github.com
-    """
     if not text:
         return []
-
-    # Corrige alguns padrões comuns de quebra/espaço
     t = text.replace("https ://", "https://").replace("http ://", "http://")
-    t = re.sub(r"(https?://)\s+", r"\1", t)   # remove espaço depois de https://
-    t = t.replace("\n", " ")                 # junta linhas (ajuda URL quebrada)
+    t = re.sub(r"(https?://)\s+", r"\1", t)
+    t = t.replace("\n", " ")
     t = re.sub(r"\s+", " ", t)
 
     urls = []
-
-    # 1) links com esquema
-    for u in re.findall(r"https?://[^\s]+", t):
-        urls.append(u)
-
-    # 2) links sem esquema: www., linkedin.com, github.com
-    for u in re.findall(r"\b(?:www\.[^\s]+|linkedin\.com/[^\s]+|github\.com/[^\s]+)\b", t, flags=re.IGNORECASE):
-        urls.append(u)
-
+    urls += re.findall(r"https?://[^\s]+", t)
+    urls += re.findall(r"\b(?:www\.[^\s]+|linkedin\.com/[^\s]+|github\.com/[^\s]+)\b", t, flags=re.IGNORECASE)
     return normalize_links(urls)
 
 def extract_phone_from_text(text: str) -> str:
     if not text:
         return ""
     t = text.replace("\n", " ")
-    # procura algo tipo +1 (346) - 637-9674
     m = re.search(r"\+\d[\d\s\(\)\-\.]{7,}", t)
     return m.group(0).strip() if m else ""
+
+def extract_cert_skills_interests(lines: list[str]) -> dict:
+    """
+    Extrai seção:
+      CERTIFICATIONS, SKILLS & INTERESTS
+    e retorna:
+      - certifications: [..]
+      - skills_raw: "..."
+      - interests: [..]
+    """
+    if not lines:
+        return {}
+
+    start = None
+    for i, ln in enumerate(lines):
+        if CERT_SECTION_RE.match(ln.strip()):
+            start = i + 1
+            break
+    if start is None:
+        return {}
+
+    chunk = []
+    for j in range(start, len(lines)):
+        ln = lines[j].strip()
+        if not ln:
+            continue
+
+        # corta se encontrar outro header em caps curto
+        if len(ln) <= 40 and ln.isupper() and j > start + 1:
+            break
+
+        chunk.append(ln)
+
+    if not chunk:
+        return {}
+
+    text = " ".join(chunk)
+    text = re.sub(r"\s+", " ", text)
+
+    def grab(label: str) -> str:
+        m = re.search(
+            rf"{label}\s*:\s*(.*?)(?=(Certifications|Skills|Interests)\s*:|$)",
+            text, re.IGNORECASE
+        )
+        return m.group(1).strip() if m else ""
+
+    certs = grab("Certifications")
+    skills = grab("Skills")
+    interests = grab("Interests")
+
+    cert_list = []
+    if certs:
+        for part in re.split(r"[;•]", certs):
+            p = part.strip(" ;,-")
+            if p:
+                cert_list.append(p)
+
+    interest_list = []
+    if interests:
+        for part in re.split(r"[;•,]", interests):
+            p = part.strip(" ;,-")
+            if p:
+                interest_list.append(p)
+
+    return {
+        "certifications": cert_list,
+        "skills_raw": skills,
+        "interests": interest_list
+    }
 
 def normalize_matrix(matrix: dict) -> dict:
     """
@@ -190,42 +244,47 @@ def normalize_matrix(matrix: dict) -> dict:
     Normaliza:
       - header.links (lista)
       - header.contact_line (lista)
+      - certifications/interests (listas)
+      - skills_raw (string)
       - achievements[] (a partir de achievements_raw)
     """
     matrix = matrix or {}
 
-    # Aliases de experiências
     if "experiences" not in matrix:
         for k in ("experience", "work_experience", "jobs"):
             if k in matrix and isinstance(matrix.get(k), list):
                 matrix["experiences"] = matrix.get(k) or []
                 break
 
-    # Header defaults
     if "header" not in matrix or not isinstance(matrix.get("header"), dict):
         matrix["header"] = {}
-
     header = matrix["header"]
 
-    # normaliza contact_line
     cl = header.get("contact_line", [])
     if isinstance(cl, str):
         cl = [cl]
     header["contact_line"] = [str(x).strip() for x in (cl or []) if str(x).strip()]
 
-    # normaliza links
     links = header.get("links", [])
     if isinstance(links, str):
         links = [links]
     header["links"] = normalize_links([str(x).strip() for x in (links or [])])
 
-    # phone
-    if "phone" in header and header["phone"]:
-        header["phone"] = str(header["phone"]).strip()
-    else:
-        header["phone"] = str(header.get("phone", "") or "").strip()
-
+    header["phone"] = str(header.get("phone", "") or "").strip()
     matrix["header"] = header
+
+    # certifications / interests
+    certs = matrix.get("certifications", [])
+    if isinstance(certs, str):
+        certs = [certs]
+    matrix["certifications"] = [str(x).strip() for x in (certs or []) if str(x).strip()]
+
+    interests = matrix.get("interests", [])
+    if isinstance(interests, str):
+        interests = [interests]
+    matrix["interests"] = [str(x).strip() for x in (interests or []) if str(x).strip()]
+
+    matrix["skills_raw"] = str(matrix.get("skills_raw", "") or "").strip()
 
     exps = ensure_exp_ids(matrix.get("experiences", []) or [])
     for exp in exps:
@@ -258,121 +317,7 @@ def fmt_field(value: str, show_missing: bool = True) -> str:
         return f"<span class='missing'>{safe}</span>"
     return safe
 
-def render_cv_html(cv: dict, lang: str, show_missing: bool = True, export_clean: bool = False) -> str:
-    """
-    Ajuste fino:
-    - Depois do Nome e Telefone, mostrar links (LinkedIn/GitHub/Portfólio) se existirem.
-    - Se não existirem, passa sem validação e sem quebrar layout.
-    """
-    cv = cv or {}
-    header = cv.get("header", {}) or {}
-
-    name = header.get("name", "") or ""
-
-    phone = header.get("phone", "") or ""
-    links = header.get("links", []) or []
-
-    contact_line = header.get("contact_line", []) or []
-    if isinstance(contact_line, str):
-        contact_line = [contact_line]
-
-    # tenta pegar phone/links do contact_line se não vierem estruturados
-    if not phone:
-        phone = extract_phone_from_text(" ".join([str(x) for x in contact_line]))
-
-    if not links:
-        links = extract_links_from_text(" ".join([str(x) for x in contact_line]))
-
-    summary = cv.get("summary", "") or ""
-    skills = cv.get("skills", []) or []
-    education = cv.get("education", []) or []
-    experience = cv.get("experience", []) or []
-
-    if lang == "pt-BR":
-        L_SUMMARY, L_SKILLS, L_EXPERIENCE, L_EDU = "Resumo", "Skills", "Experiência", "Educação"
-    else:
-        L_SUMMARY, L_SKILLS, L_EXPERIENCE, L_EDU = "Summary", "Skills", "Experience", "Education"
-
-    def clean(v: str) -> str:
-        return strip_missing(v) if export_clean else (v or "")
-
-    def rel_key(x):
-        return 0 if x.get("relevance") == "high" else 1
-    experience_sorted = sorted(experience, key=rel_key)
-
-    html = []
-    html.append(f"<h1>{fmt_field(clean(name), show_missing)}</h1>")
-
-    contact_rows = []
-    if phone:
-        contact_rows.append(fmt_field(clean(phone), show_missing))
-
-    links = normalize_links(links)
-    if links:
-        link_html = " | ".join([
-            f"<a href='{escape(u)}' target='_blank'>{escape(u)}</a>"
-            for u in links if str(u).strip()
-        ])
-        if link_html.strip():
-            contact_rows.append(link_html)
-
-    # fallback final se nada veio
-    if not contact_rows and contact_line:
-        fallback = " | ".join([escape(str(x)) for x in contact_line if str(x).strip()])
-        if fallback.strip():
-            contact_rows.append(fallback)
-
-    if contact_rows:
-        html.append(f"<div class='contact-line'>{'<br/>'.join(contact_rows)}</div>")
-
-    if summary:
-        html.append(f"<div class='section-title'>{L_SUMMARY}</div>")
-        html.append(f"<div class='experience-description'>{fmt_field(clean(summary), show_missing)}</div>")
-
-    if skills:
-        html.append(f"<div class='section-title'>{L_SKILLS}</div>")
-        html.append(f"<div class='experience-description'>{fmt_field(clean(join_slash(skills)), show_missing)}</div>")
-
-    if experience_sorted:
-        html.append(f"<div class='section-title'>{L_EXPERIENCE}</div>")
-        for exp in experience_sorted:
-            company = clean(exp.get("company", ""))
-            date_range = clean(exp.get("date_range", ""))
-            title = clean(exp.get("title", ""))
-            location = clean(exp.get("location", ""))
-            achievements = exp.get("achievements", []) or []
-            achievements = [strip_missing(a) if export_clean else a for a in achievements]
-
-            html.append("<table class='timeline-table'>")
-            html.append("<tr>")
-            html.append(f"<td class='company-name'>{fmt_field(company, show_missing)}</td>")
-            html.append(f"<td class='date-range'>{fmt_field(date_range, show_missing)}</td>")
-            html.append("</tr>")
-            html.append("</table>")
-
-            html.append("<table class='subrow-table'>")
-            html.append("<tr>")
-            html.append(f"<td class='job-title'>{fmt_field(title, show_missing)}</td>")
-            html.append(f"<td class='location'>{fmt_field(location, show_missing)}</td>")
-            html.append("</tr>")
-            html.append("</table>")
-
-            html.append(f"<div class='experience-description'>{fmt_field(join_slash(achievements), show_missing)}</div>")
-
-    if education:
-        html.append(f"<div class='section-title'>{L_EDU}</div>")
-        for edu in education:
-            line = clean(edu.get("line", ""))
-            details = clean(edu.get("details", ""))
-            txt = (f"{line} / {details}").strip(" /")
-            html.append(f"<div class='experience-description'>{fmt_field(txt, show_missing)}</div>")
-
-    return "\n".join(html)
-
 def slice_experience_section(lines: list[str]) -> list[str]:
-    """
-    Tenta recortar apenas a seção de experiência para melhorar o parser.
-    """
     if not lines:
         return lines
 
@@ -381,9 +326,8 @@ def slice_experience_section(lines: list[str]) -> list[str]:
         if SECTION_START_RE.match(ln.strip()):
             start = i + 1
             break
-
     if start is None:
-        return lines  # sem header, usa tudo
+        return lines
 
     end = None
     for j in range(start, len(lines)):
@@ -396,8 +340,8 @@ def slice_experience_section(lines: list[str]) -> list[str]:
 def parse_experiences_from_lines(lines: list[str]) -> list[dict]:
     """
     Parser por âncora de data:
-    - quando encontra uma linha com DATE_RE, cria um bloco até a próxima data
-    - tenta obter title/company/location na mesma linha (se tiver "|") ou nas linhas próximas
+    - encontra DATE_RE e cria um bloco até a próxima data
+    - tenta achar title/company/location na mesma linha com '|'
     """
     exps = []
     i = 0
@@ -405,25 +349,18 @@ def parse_experiences_from_lines(lines: list[str]) -> list[dict]:
         ln = lines[i]
 
         if DATE_RE.search(ln):
-            # coleta bloco até próxima data
+            date_range = DATE_RE.search(ln).group(0).strip()
+
             j = i + 1
             chunk = []
             while j < len(lines) and not DATE_RE.search(lines[j]):
                 chunk.append(lines[j])
                 j += 1
 
-            # heurística: tentar parsear "Title | Company | DateRange | Location" ou variações
             title = company = location = ""
-            date_range = DATE_RE.search(ln).group(0).strip()
-
             if "|" in ln:
                 parts = [p.strip() for p in ln.split("|") if p.strip()]
-                # remove a parte do date_range do array
-                # geralmente: title, company, date_range, location
-                # mas pode variar, então tenta mapear:
-                # pega tudo exceto o item que contém date_range
                 parts_no_date = [p for p in parts if date_range not in p]
-                # tenta inferir
                 if len(parts_no_date) >= 1:
                     title = parts_no_date[0]
                 if len(parts_no_date) >= 2:
@@ -431,13 +368,10 @@ def parse_experiences_from_lines(lines: list[str]) -> list[dict]:
                 if len(parts_no_date) >= 3:
                     location = parts_no_date[2]
             else:
-                # sem '|': usa linha anterior como header possível
                 prev = lines[i - 1] if i - 1 >= 0 else ""
                 nxt = lines[i + 1] if i + 1 < len(lines) else ""
-                # tenta dividir por " - " ou " • " ou " / "
                 header_line = prev if prev and len(prev) < 120 else nxt
                 if header_line:
-                    # tentativas simples
                     if " - " in header_line:
                         a = [p.strip() for p in header_line.split(" - ") if p.strip()]
                         if len(a) >= 1:
@@ -445,7 +379,6 @@ def parse_experiences_from_lines(lines: list[str]) -> list[dict]:
                         if len(a) >= 2:
                             company = a[1]
                     else:
-                        # última tentativa: separar por espaço
                         title = header_line
 
             achievements_raw = " ".join([c for c in chunk if c.strip()])
@@ -463,21 +396,16 @@ def parse_experiences_from_lines(lines: list[str]) -> list[dict]:
     return exps
 
 def parse_matrix_from_pdf(cv_text: str) -> dict:
-    """
-    PDF -> matriz:
-    - header: name (linha 1), phone + links extraídos do texto inteiro (robusto)
-    - experiences: tenta recortar seção e parsear por âncora de data
-    - mantém raw_cv_text sempre (fallback para o Gemini)
-    """
     lines = [ln.strip() for ln in (cv_text or "").splitlines() if ln.strip()]
     if not lines:
         return {}
 
     name = lines[0]
-
-    # Links/telefone robustos: varre o TEXTO inteiro (não só top 20)
     links = extract_links_from_text(cv_text)
     phone = extract_phone_from_text(cv_text)
+
+    # Extrai cursos/certificações/skills/interests do PDF
+    extras = extract_cert_skills_interests(lines)
 
     header = {
         "name": name,
@@ -486,7 +414,6 @@ def parse_matrix_from_pdf(cv_text: str) -> dict:
         "contact_line": []
     }
 
-    # Experiências: tenta trabalhar só na seção
     exp_lines = slice_experience_section(lines)
     experiences = parse_experiences_from_lines(exp_lines)
 
@@ -495,7 +422,9 @@ def parse_matrix_from_pdf(cv_text: str) -> dict:
         "summary": "",
         "experiences": experiences,
         "education": [],
-        "skills_raw": "",
+        "skills_raw": extras.get("skills_raw", ""),
+        "certifications": extras.get("certifications", []),
+        "interests": extras.get("interests", []),
         "raw_cv_text": cv_text
     }
 
@@ -566,15 +495,18 @@ Language rule:
 
 Hard rules:
 - Use the matrix as the primary source of truth. Do NOT invent companies, dates, titles, degrees, certifications, or metrics.
-- If matrix/header has URLs (LinkedIn/GitHub/portfolio), put them in cv.header.links.
-- If matrix/header has a phone number, put it in cv.header.phone.
+- If matrix.header has URLs, put them in cv.header.links.
+- If matrix.header has a phone number, put it in cv.header.phone.
+- If matrix.certifications exists, include them in cv.certifications (do not drop).
+- If matrix.interests exists, include them in cv.interests (do not drop).
+- If matrix.skills_raw exists, convert it into cv.skills (split into items).
 {coverage_block}
 
 Missing info rule:
 - If any field is missing/unclear:
   (a) put a placeholder in the CV field exactly like: "MISSING — <what to add>"
   (b) add an entry to missing_info with field path, why it matters, and an example input.
-- Keep missing_info <= 10 items (most important only).
+- Keep missing_info <= 10 items.
 
 Style:
 - Use simple, direct wording.
@@ -594,6 +526,8 @@ JSON schema:
     }},
     "summary": "string",
     "skills": ["string"],
+    "certifications": ["string"],
+    "interests": ["string"],
     "experience": [
       {{
         "exp_id": "string",
@@ -612,7 +546,7 @@ JSON schema:
   "analysis_md": "string",
   "missing_info": [
     {{
-      "field": "string (e.g., cv.experience[1].date_range)",
+      "field": "string",
       "why_it_matters": "string",
       "suggested_input_example": "string"
     }}
@@ -634,8 +568,129 @@ Company description:
 Write everything in: {target_lang}
 """.strip()
 
+def render_cv_html(cv: dict, lang: str, show_missing: bool = True, export_clean: bool = False) -> str:
+    cv = cv or {}
+    header = cv.get("header", {}) or {}
+
+    name = header.get("name", "") or ""
+    phone = header.get("phone", "") or ""
+    links = header.get("links", []) or []
+    contact_line = header.get("contact_line", []) or []
+
+    if isinstance(contact_line, str):
+        contact_line = [contact_line]
+
+    # fallback de phone/links se vierem dentro do contact_line
+    if not phone:
+        phone = extract_phone_from_text(" ".join([str(x) for x in contact_line]))
+    if not links:
+        links = extract_links_from_text(" ".join([str(x) for x in contact_line]))
+
+    summary = cv.get("summary", "") or ""
+    skills = cv.get("skills", []) or []
+    certifications = cv.get("certifications", []) or []
+    interests = cv.get("interests", []) or []
+    education = cv.get("education", []) or []
+    experience = cv.get("experience", []) or []
+
+    if lang == "pt-BR":
+        L_SUMMARY, L_SKILLS, L_EXPERIENCE, L_EDU = "Resumo", "Skills", "Experiência", "Educação"
+        L_CERTS, L_INTERESTS = "Certificações", "Interesses"
+    else:
+        L_SUMMARY, L_SKILLS, L_EXPERIENCE, L_EDU = "Summary", "Skills", "Experience", "Education"
+        L_CERTS, L_INTERESTS = "Certifications", "Interests"
+
+    def clean(v: str) -> str:
+        return strip_missing(v) if export_clean else (v or "")
+
+    def rel_key(x):
+        return 0 if x.get("relevance") == "high" else 1
+    experience_sorted = sorted(experience, key=rel_key)
+
+    html = []
+    html.append(f"<h1>{fmt_field(clean(name), show_missing)}</h1>")
+
+    contact_rows = []
+    if phone:
+        contact_rows.append(fmt_field(clean(phone), show_missing))
+
+    links = normalize_links(links)
+    if links:
+        link_html = " | ".join([
+            f"<a href='{escape(u)}' target='_blank'>{escape(u)}</a>"
+            for u in links if str(u).strip()
+        ])
+        if link_html.strip():
+            contact_rows.append(link_html)
+
+    if not contact_rows and contact_line:
+        fallback = " | ".join([escape(str(x)) for x in contact_line if str(x).strip()])
+        if fallback.strip():
+            contact_rows.append(fallback)
+
+    if contact_rows:
+        html.append(f"<div class='contact-line'>{'<br/>'.join(contact_rows)}</div>")
+
+    if summary:
+        html.append(f"<div class='section-title'>{L_SUMMARY}</div>")
+        html.append(f"<div class='experience-description'>{fmt_field(clean(summary), show_missing)}</div>")
+
+    if skills:
+        html.append(f"<div class='section-title'>{L_SKILLS}</div>")
+        html.append(f"<div class='experience-description'>{fmt_field(clean(join_slash(skills)), show_missing)}</div>")
+
+    # NOVO: Certifications
+    if certifications:
+        certs_join = " / ".join([c for c in certifications if str(c).strip()])
+        if certs_join.strip():
+            html.append(f"<div class='section-title'>{L_CERTS}</div>")
+            html.append(f"<div class='experience-description'>{fmt_field(clean(certs_join), show_missing)}</div>")
+
+    # NOVO: Interests
+    if interests:
+        interests_join = " / ".join([i for i in interests if str(i).strip()])
+        if interests_join.strip():
+            html.append(f"<div class='section-title'>{L_INTERESTS}</div>")
+            html.append(f"<div class='experience-description'>{fmt_field(clean(interests_join), show_missing)}</div>")
+
+    if experience_sorted:
+        html.append(f"<div class='section-title'>{L_EXPERIENCE}</div>")
+        for exp in experience_sorted:
+            company = clean(exp.get("company", ""))
+            date_range = clean(exp.get("date_range", ""))
+            title = clean(exp.get("title", ""))
+            location = clean(exp.get("location", ""))
+            achievements = exp.get("achievements", []) or []
+            achievements = [strip_missing(a) if export_clean else a for a in achievements]
+
+            html.append("<table class='timeline-table'>")
+            html.append("<tr>")
+            html.append(f"<td class='company-name'>{fmt_field(company, show_missing)}</td>")
+            html.append(f"<td class='date-range'>{fmt_field(date_range, show_missing)}</td>")
+            html.append("</tr>")
+            html.append("</table>")
+
+            html.append("<table class='subrow-table'>")
+            html.append("<tr>")
+            html.append(f"<td class='job-title'>{fmt_field(title, show_missing)}</td>")
+            html.append(f"<td class='location'>{fmt_field(location, show_missing)}</td>")
+            html.append("</tr>")
+            html.append("</table>")
+
+            html.append(f"<div class='experience-description'>{fmt_field(join_slash(achievements), show_missing)}</div>")
+
+    if education:
+        html.append(f"<div class='section-title'>{L_EDU}</div>")
+        for edu in education:
+            line = clean(edu.get("line", ""))
+            details = clean(edu.get("details", ""))
+            txt = (f"{line} / {details}").strip(" /")
+            html.append(f"<div class='experience-description'>{fmt_field(txt, show_missing)}</div>")
+
+    return "\n".join(html)
+
 # =========================
-# 4) UI
+# 5) UI
 # =========================
 st.markdown("<h1 style='text-align:center;'>🚀 Gerador de Currículo Inteligente</h1>", unsafe_allow_html=True)
 
@@ -677,7 +732,7 @@ def load_matrix() -> dict:
     return {}
 
 # =========================
-# 5) LÓGICA DE GERAÇÃO
+# 6) GERAÇÃO
 # =========================
 if btn_gerar:
     if not job_description.strip():
@@ -710,11 +765,13 @@ if btn_gerar:
         lang = detect_language(job_description)
         prompt = build_prompt(matrix, job_description, company_description or "", lang)
 
-        with st.spinner("Gerando com Gemini..."):
+        # ✅ TEXTO ALTERADO AQUI
+        with st.spinner("Processando suas informações..."):
             resp = client.models.generate_content(
                 model="gemini-2.0-flash",
                 contents=prompt
             )
+
         raw = get_response_text(resp).strip()
         data = extract_json_loose(raw)
 
@@ -748,6 +805,9 @@ if btn_gerar:
             "raw_len": len(raw),
             "matrix_header_links": (matrix.get("header", {}) or {}).get("links", []),
             "matrix_header_phone": (matrix.get("header", {}) or {}).get("phone", ""),
+            "matrix_certifications": matrix.get("certifications", []),
+            "matrix_skills_raw_len": len(matrix.get("skills_raw", "") or ""),
+            "matrix_interests": matrix.get("interests", []),
         }
 
     except Exception as e:
@@ -755,7 +815,7 @@ if btn_gerar:
         st.error(f"Erro: {e}")
 
 # =========================
-# 6) EXIBIÇÃO
+# 7) EXIBIÇÃO
 # =========================
 if st.session_state.data:
     data = st.session_state.data
