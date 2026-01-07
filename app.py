@@ -3,6 +3,9 @@ import streamlit as st
 from google import genai
 from pypdf import PdfReader
 import streamlit.components.v1 as components
+from io import BytesIO
+from docx import Document
+from docx.shared import Pt
 
 # 1) CONFIGURAÇÃO DA PÁGINA
 st.set_page_config(page_title="Gerador de Currículo", layout="wide", page_icon="🚀")
@@ -24,7 +27,7 @@ CV_CSS = """
         box-shadow: 0 0 15px rgba(0,0,0,0.1);
         color: #000;
         line-height: 1.4;
-        text-align: left; /* Conteúdo interno à esquerda, mas a folha centralizada */
+        text-align: left;
     }
     h1 { font-size: 26px; margin-bottom: 5px; font-weight: bold; text-align: center; }
     .contact-line { font-size: 0.95em; margin-bottom: 20px; border-bottom: 1px solid #eee; padding-bottom: 10px; text-align: center; }
@@ -46,10 +49,28 @@ def detect_language(text):
     pt_hits = len(re.findall(r"\b(vaga|requisitos|experiência|responsabilidades|conhecimento)\b", text))
     return "pt-BR" if pt_hits > 2 else "en"
 
+# --- FUNÇÃO PARA GERAR O ARQUIVO .DOCX ---
+def generate_docx(html_content):
+    doc = Document()
+    
+    # Limpeza básica de tags para o Word
+    # Remove tags HTML e tenta manter uma estrutura mínima
+    clean_text = re.sub('<[^<]+?>', '', html_content)
+    
+    section = doc.sections[0]
+    paragraph = doc.add_paragraph(clean_text)
+    run = paragraph.runs[0]
+    run.font.name = 'Arial'
+    run.font.size = Pt(11)
+    
+    buffer = BytesIO()
+    doc.save(buffer)
+    buffer.seek(0)
+    return buffer
+
 # 3) INTERFACE
 st.markdown("<h1 style='text-align: center;'>🚀 Gerador de Currículo Inteligente</h1>", unsafe_allow_html=True)
 
-# Layout de colunas centralizado
 _, center_col, _ = st.columns([1, 2, 1])
 
 with center_col:
@@ -75,10 +96,10 @@ if st.button("Gerar Currículo e Análise", use_container_width=True):
                 1. Use [CV_START] e [CV_END] para o HTML.
                 2. Use [ANALYSIS_START] e [ANALYSIS_END] para a análise.
                 3. No HTML:
-                   - Empresa e data na mesma linha (<div class="timeline-row">). [cite: 16]
-                   - Cargo e localização abaixo (<div class="timeline-subrow">). [cite: 16]
-                   - Descrição como texto corrido, separando itens por "/", sem listas de bolinhas. [cite: 19]
-                4. Na análise: inclua seções "O que está melhor", "O que melhorar" e "Perguntas de entrevista". [cite: 26, 27, 32, 62]
+                   - Empresa e data na mesma linha (<div class="timeline-row">).
+                   - Cargo e localização abaixo (<div class="timeline-subrow">).
+                   - Descrição como texto corrido, separando itens por "/", sem listas de bolinhas.
+                4. Na análise: inclua seções "O que está melhor", "O que melhorar" e "Perguntas de entrevista".
                 
                 DADOS: {cv_text}
                 VAGA: {job_description}
@@ -100,8 +121,22 @@ if st.session_state.content:
         full_display = f"<html><head>{CV_CSS}</head><body><div class='cv-paper'>{clean_html}</div></body></html>"
         components.html(full_display, height=1000, scrolling=True)
 
-        if st.button("📝 Exportar para Google Docs", use_container_width=True):
-            st.info("Esta funcionalidade exportará o conteúdo para o seu Drive assim que as credenciais forem configuradas. ")
+        # --- NOVOS BOTÕES DE EXPORTAÇÃO ---
+        col_btn1, col_btn2 = st.columns(2)
+        
+        with col_btn1:
+            docx_file = generate_docx(clean_html)
+            st.download_button(
+                label="📥 Baixar em Formato .docx",
+                data=docx_file,
+                file_name="Curriculo_Otimizado.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                use_container_width=True
+            )
+            
+        with col_btn2:
+            if st.button("📝 Exportar para Google Docs", use_container_width=True):
+                st.info("Esta funcionalidade exportará para o Drive via API assim que as credenciais forem configuradas.")
 
     if analysis_match:
         _, a_col, _ = st.columns([1, 2, 1])
