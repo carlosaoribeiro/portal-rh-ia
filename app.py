@@ -119,12 +119,31 @@ def normalize_matrix(matrix: dict) -> dict:
     """
     matrix = matrix or {}
 
-    # Aliases de chave
+    # Aliases de experiências
     if "experiences" not in matrix:
         for k in ("experience", "work_experience", "jobs"):
             if k in matrix and isinstance(matrix.get(k), list):
                 matrix["experiences"] = matrix.get(k) or []
                 break
+
+    # Header defaults
+    if "header" not in matrix or not isinstance(matrix.get("header"), dict):
+        matrix["header"] = {}
+
+    header = matrix["header"]
+    # normaliza links como lista
+    links = header.get("links", [])
+    if isinstance(links, str):
+        links = [links]
+    header["links"] = [str(x).strip() for x in (links or []) if str(x).strip()]
+
+    # normaliza contact_line
+    cl = header.get("contact_line", [])
+    if isinstance(cl, str):
+        cl = [cl]
+    header["contact_line"] = [str(x).strip() for x in (cl or []) if str(x).strip()]
+
+    matrix["header"] = header
 
     exps = ensure_exp_ids(matrix.get("experiences", []) or [])
     for exp in exps:
@@ -158,11 +177,39 @@ def fmt_field(value: str, show_missing: bool = True) -> str:
     return safe
 
 def render_cv_html(cv: dict, lang: str, show_missing: bool = True, export_clean: bool = False) -> str:
+    """
+    Ajuste fino:
+    - Depois do Nome e Telefone, mostrar links (LinkedIn/GitHub/Portfólio) se existirem.
+    - Se não existirem, passa sem validação e sem quebrar layout.
+    """
     cv = cv or {}
     header = cv.get("header", {}) or {}
-    name = header.get("name", "")
-    contact = header.get("contact_line", []) or []
-    contact_line = " | ".join([c for c in contact if str(c).strip()])
+
+    name = header.get("name", "") or ""
+
+    # NOVO: phone + links (preferencial)
+    phone = header.get("phone", "") or ""
+    links = header.get("links", []) or []
+
+    # compatibilidade: contact_line pode ter phone/links
+    contact_line = header.get("contact_line", []) or []
+    if isinstance(contact_line, str):
+        contact_line = [contact_line]
+
+    # tenta pegar phone do contact_line se vazio
+    if not phone:
+        for item in contact_line:
+            if re.search(r"\+\d", str(item)):
+                phone = str(item).strip()
+                break
+
+    # tenta pegar links do contact_line se vazio
+    if not links:
+        for item in contact_line:
+            for u in re.findall(r"https?://\S+", str(item)):
+                u = u.strip().rstrip(").,;")
+                if u not in links:
+                    links.append(u)
 
     summary = cv.get("summary", "") or ""
     skills = cv.get("skills", []) or []
@@ -183,8 +230,29 @@ def render_cv_html(cv: dict, lang: str, show_missing: bool = True, export_clean:
 
     html = []
     html.append(f"<h1>{fmt_field(clean(name), show_missing)}</h1>")
-    if contact_line:
-        html.append(f"<div class='contact-line'>{fmt_field(clean(contact_line), show_missing)}</div>")
+
+    # Linha 1: phone
+    # Linha 2: links
+    contact_rows = []
+    if phone:
+        contact_rows.append(fmt_field(clean(phone), show_missing))
+
+    if links:
+        link_html = " | ".join([
+            f"<a href='{escape(u)}' target='_blank'>{escape(u)}</a>"
+            for u in links if str(u).strip()
+        ])
+        if link_html.strip():
+            contact_rows.append(link_html)
+
+    # fallback: se não tem phone/links mas tem contact_line
+    if not contact_rows and contact_line:
+        fallback = " | ".join([escape(str(x)) for x in contact_line if str(x).strip()])
+        if fallback.strip():
+            contact_rows.append(fallback)
+
+    if contact_rows:
+        html.append(f"<div class='contact-line'>{'<br/>'.join(contact_rows)}</div>")
 
     if summary:
         html.append(f"<div class='section-title'>{L_SUMMARY}</div>")
@@ -232,18 +300,39 @@ def render_cv_html(cv: dict, lang: str, show_missing: bool = True, export_clean:
 
 def parse_matrix_from_pdf(cv_text: str) -> dict:
     """
-    Parser simples (fallback):
-    - tenta pegar header e experiências com padrão: "Title | Company | Sep 2024 - Present | Location"
-    - se não achar, retorna experiências vazias, mas mantém raw_cv_text para o Gemini inferir.
+    Fallback melhorado:
+    - pega nome (linha 1)
+    - tenta pegar phone e URLs nas primeiras 20 linhas
+    - tenta parsear experiências se tiver "Title | Company | DateRange | Location"
+    - se não achar experiences, segue com raw_cv_text para o Gemini inferir (sem inventar)
     """
     lines = [ln.strip() for ln in (cv_text or "").splitlines() if ln.strip()]
     if not lines:
         return {}
 
     name = lines[0]
-    contact_line = []
-    if len(lines) > 1 and ("http" in lines[1] or "+" in lines[1] or "linkedin" in lines[1].lower()):
-        contact_line = [p.strip() for p in re.split(r"[•|]", lines[1]) if p.strip()]
+    top = lines[:20]
+    links = []
+    phone = ""
+
+    for ln in top:
+        found_urls = re.findall(r"https?://\S+", ln)
+        for u in found_urls:
+            u = u.strip().rstrip(").,;")
+            if u not in links:
+                links.append(u)
+
+        if not phone and re.search(r"\+\d", ln):
+            m = re.search(r"\+\d[\d\s\(\)\-\.]{7,}", ln)
+            if m:
+                phone = m.group(0).strip()
+
+    header = {
+        "name": name,
+        "phone": phone,
+        "links": links,
+        "contact_line": []  # compatibilidade
+    }
 
     experiences = []
     i = 0
@@ -278,7 +367,7 @@ def parse_matrix_from_pdf(cv_text: str) -> dict:
             i += 1
 
     return {
-        "header": {"name": name, "contact_line": contact_line},
+        "header": header,
         "summary": "",
         "experiences": experiences,
         "education": [],
@@ -296,7 +385,6 @@ def build_prompt(matrix: dict, job_description: str, company_description: str, l
 
     matrix_json = json.dumps(matrix, ensure_ascii=False)
 
-    # Se NÃO tiver experiences na matriz, não faz sentido “exp_id coverage”.
     coverage_block = ""
     coverage_schema = ""
     if has_matrix_exps:
@@ -332,6 +420,8 @@ Language rule:
 
 Hard rules:
 - Use the matrix as the primary source of truth. Do NOT invent companies, dates, titles, degrees, certifications, or metrics.
+- If matrix/header has URLs (LinkedIn/GitHub/portfolio), put them in cv.header.links.
+- If matrix/header has a phone number, put it in cv.header.phone.
 {coverage_block}
 
 Missing info rule:
@@ -348,7 +438,9 @@ JSON schema:
   "cv": {{
     "header": {{
       "name": "string",
-      "contact_line": ["string", "string", "string"]
+      "phone": "string",
+      "links": ["string"],
+      "contact_line": ["string"]
     }},
     "summary": "string",
     "skills": ["string"],
@@ -423,8 +515,7 @@ if "debug" not in st.session_state:
 def load_matrix() -> dict:
     if matrix_json_file is not None:
         raw = matrix_json_file.read().decode("utf-8")
-        m = json.loads(raw)
-        return m
+        return json.loads(raw)
 
     if matrix_pdf_file is not None:
         cv_text = extract_pdf_text(matrix_pdf_file)
