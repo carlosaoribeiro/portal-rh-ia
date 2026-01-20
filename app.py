@@ -779,7 +779,7 @@ if btn_gerar:
         st.error(f"Erro: {e}")
 
 # =========================
-# 7) EXIBIÇÃO
+# 7) EXIBIÇÃO — MODELO ATS / PDF (IGUAL AO SEU CV)
 # =========================
 if st.session_state.data:
     data = st.session_state.data
@@ -787,137 +787,123 @@ if st.session_state.data:
 
     cv = data.get("cv", {}) or {}
     analysis_md = data.get("analysis_md", "") or ""
-    missing_info = data.get("missing_info", []) or []
 
-    # ESCOLHA DE LAYOUT
-    layout_mode = st.radio(
-        "Layout do currículo",
-        ["Timeline (atual)", "Minimalista (clássico)"],
-        horizontal=True
-    )
-
-    # CSS DO LAYOUT MINIMALISTA
-    CV_CSS_MINIMAL = """
+    # CSS ATS / PDF
+    CV_CSS_ATS = """
     <style>
     .cv-paper {
-      font-family: Arial, sans-serif;
-      color: #333;
-      background-color: #ffffff;
-      width: 850px;
-      margin: 0 auto;
-      padding: 50px;
-      line-height: 1.6;
-      box-shadow: 0 0 15px rgba(0,0,0,0.1);
+        font-family: Arial, sans-serif;
+        color: #000;
+        background: #fff;
+        width: 850px;
+        margin: 0 auto;
+        padding: 48px;
+        line-height: 1.45;
     }
-    .header { text-align:center; margin-bottom:24px; }
-    .header h1 { font-size:28px; margin:0; color:#000; }
-    .meta { font-size:14px; color:#666; margin-top:6px; }
-
-    .section { margin-top:18px; }
-    .section h2 {
-      font-size:18px;
-      border-bottom:1px solid #ccc;
-      padding-bottom:6px;
-      margin-bottom:10px;
-      color:#000;
+    h1 {
+        font-size: 28px;
+        margin-bottom: 6px;
+        font-weight: 700;
     }
-
-    .experience-item { margin-bottom:16px; }
-    .date { font-weight:700; color:#666; }
-    .role { font-weight:700; color:#000; }
-    .company { font-style:italic; color:#333; }
-
-    ul { padding-left:18px; }
-    li { margin-bottom:6px; }
-
-    a { color:#666; text-decoration:none; }
-    a:hover { text-decoration:underline; }
-
-    .missing { color:#666; font-style:italic; text-decoration:underline; }
+    .contact {
+        font-size: 11pt;
+        margin-bottom: 18px;
+    }
+    .section-title {
+        font-size: 12pt;
+        font-weight: 700;
+        margin-top: 22px;
+        margin-bottom: 8px;
+        letter-spacing: 0.04em;
+    }
+    .job-header {
+        font-weight: 700;
+        margin-top: 10px;
+    }
+    .job-title {
+        font-style: italic;
+        margin-bottom: 4px;
+    }
+    ul {
+        margin-top: 4px;
+        padding-left: 18px;
+    }
+    li {
+        margin-bottom: 6px;
+    }
     </style>
     """
 
-    # RENDER MINIMALISTA
-    def render_minimal(cv):
+    def render_ats(cv: dict) -> str:
         h = cv.get("header", {})
         html = []
 
-        html.append("<div class='header'>")
+        # NAME
         html.append(f"<h1>{h.get('name','')}</h1>")
-        meta = []
+
+        # CONTACT LINE
+        contact_parts = []
         if h.get("phone"):
-            meta.append(h["phone"])
+            contact_parts.append(h["phone"])
         for l in h.get("links", []):
-            meta.append(f"<a href='{l}' target='_blank'>{l}</a>")
-        if meta:
-            html.append("<div class='meta'>" + " | ".join(meta) + "</div>")
-        html.append("</div>")
+            contact_parts.append(l)
+        if contact_parts:
+            html.append("<div class='contact'>" + " • ".join(contact_parts) + "</div>")
 
+        # SUMMARY
         if cv.get("summary"):
-            html.append("<div class='section'><h2>Resumo Profissional</h2>")
-            html.append(f"<p>{cv['summary']}</p></div>")
+            html.append("<div class='section-title'>SUMMARY</div>")
+            html.append(f"<p>{cv['summary']}</p>")
 
-        if cv.get("skills"):
-            html.append("<div class='section'><h2>Habilidades</h2>")
-            html.append("<p>" + " / ".join(cv["skills"]) + "</p></div>")
-
+        # EXPERIENCE
         if cv.get("experience"):
-            html.append("<div class='section'><h2>Experiência Profissional</h2>")
+            html.append("<div class='section-title'>WORK EXPERIENCE</div>")
             for e in cv["experience"]:
-                html.append("<div class='experience-item'>")
-                if e.get("date_range"):
-                    html.append(f"<div class='date'>{e['date_range']}</div>")
-                if e.get("title"):
-                    html.append(f"<div class='role'>{e['title']}</div>")
-                if e.get("company"):
-                    html.append(f"<div class='company'>{e['company']}</div>")
+                company = e.get("company","")
+                date = e.get("date_range","")
+                title = e.get("title","")
+
+                html.append(f"<div class='job-header'>{company} — {date}</div>")
+                html.append(f"<div class='job-title'>{title}</div>")
+
                 if e.get("achievements"):
                     html.append("<ul>")
                     for a in e["achievements"]:
-                        html.append(f"<li>{a}</li>")
+                        html.append(f"<li>▪ {a}</li>")
                     html.append("</ul>")
-                html.append("</div>")
-            html.append("</div>")
 
+        # EDUCATION
         if cv.get("education"):
-            html.append("<div class='section'><h2>Educação</h2>")
+            html.append("<div class='section-title'>EDUCATION</div>")
             for ed in cv["education"]:
-                line = f"{ed.get('line','')} / {ed.get('details','')}".strip(" /")
+                line = f"{ed.get('line','')} — {ed.get('details','')}".strip(" —")
                 html.append(f"<p>{line}</p>")
-            html.append("</div>")
+
+        # SKILLS
+        if cv.get("skills"):
+            html.append("<div class='section-title'>SKILLS</div>")
+            html.append("<p>" + ", ".join(cv["skills"]) + "</p>")
+
+        # CERTIFICATIONS
+        if cv.get("certifications"):
+            html.append("<div class='section-title'>CERTIFICATIONS</div>")
+            html.append("<p>" + ", ".join(cv["certifications"]) + "</p>")
 
         return "\n".join(html)
 
-    # ESCOLHA FINAL
-    if layout_mode == "Minimalista (clássico)":
-        clean_html = render_minimal(cv)
-        css = CV_CSS_MINIMAL
-    else:
-        clean_html = render_cv_html(cv, lang=lang, show_missing=show_missing, export_clean=export_final)
-        css = CV_CSS
-
-    full_doc = f"<html><head><meta charset='UTF-8'>{css}</head><body><div class='cv-paper'>{clean_html}</div></body></html>"
+    clean_html = render_ats(cv)
+    full_doc = f"<html><head><meta charset='UTF-8'>{CV_CSS_ATS}</head><body><div class='cv-paper'>{clean_html}</div></body></html>"
 
     st.divider()
     components.html(full_doc, height=1000, scrolling=True)
 
-    c1, c2 = st.columns(2)
-    with c1:
-        st.download_button(
-            label="📥 Baixar Currículo (.doc)",
-            data=full_doc,
-            file_name="Curriculo.doc",
-            mime="application/msword",
-            use_container_width=True
-        )
-    with c2:
-        st.download_button(
-            label="📥 Baixar JSON",
-            data=json.dumps(data, ensure_ascii=False, indent=2),
-            file_name="saida_gemini.json",
-            mime="application/json",
-            use_container_width=True
-        )
+    st.download_button(
+        label="📥 Baixar Currículo (.doc)",
+        data=full_doc,
+        file_name="Carlos_Ribeiro_Resume.doc",
+        mime="application/msword",
+        use_container_width=True
+    )
 
     st.divider()
     st.subheader("📊 Relatório / Preparação para Entrevista")
