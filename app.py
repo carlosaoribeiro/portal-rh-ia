@@ -1,129 +1,186 @@
 import streamlit as st
 import json
 import sqlite3
-import re
+import requests
 from google import genai
-from duckduckgo_search import DDGS
-from datetime import datetime, timedelta
+from datetime import datetime
 
 # =========================
-# 1) SEGURANÇA E BANCO DE DADOS
+# CONFIGURAÇÃO INICIAL
 # =========================
 st.set_page_config(page_title="Agente de Carreira AI", layout="wide", page_icon="🚀")
 
-# A chave deve estar no painel do Streamlit Cloud
+# =========================
+# VERIFICAÇÃO DE CHAVES
+# =========================
 if "GOOGLE_API_KEY" not in st.secrets:
-    st.error("🚨 ERRO: Configure a GOOGLE_API_KEY nos Secrets do Streamlit!")
+    st.error("🚨 Configure GOOGLE_API_KEY no Streamlit Secrets.")
+    st.stop()
+
+if "SERPAPI_KEY" not in st.secrets:
+    st.error("🚨 Configure SERPAPI_KEY no Streamlit Secrets.")
     st.stop()
 
 client = genai.Client(api_key=st.secrets["GOOGLE_API_KEY"])
 
+# =========================
+# BANCO DE DADOS
+# =========================
 def init_db():
     conn = sqlite3.connect('career_agent.db', check_same_thread=False)
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS user_profile 
                  (id INTEGER PRIMARY KEY, matrix_json TEXT, last_updated DATETIME)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS job_log 
-                 (id INTEGER PRIMARY KEY, title TEXT, company TEXT, link TEXT, status TEXT)''')
     conn.commit()
     return conn
 
 conn = init_db()
 
 # =========================
-# 2) MOTOR DE BUSCA (ESTRUTURA ORIGINAL)
+# MOTOR DE BUSCA – GOOGLE JOBS
 # =========================
 def agente_explorer_vagas(cargo, local):
-    # Sua Query Original
-    query = (
-        f'"{cargo}" {local} '
-        f'(site:linkedin.com/jobs/view OR site:glassdoor.com/Job OR site:flexjobs.com OR site:remote.co) '
-        f'-intitle:"help" -intitle:"ajuda" -intitle:"support" -intitle:"check"'
-    )
-    
-    vagas_validas = []
-    logs = [f"🔍 Buscando: {query}"]
-    
+    url = "https://serpapi.com/search.json"
+
+    params = {
+        "engine": "google_jobs",
+        "q": f"{cargo} {local}",
+        "hl": "en",
+        "api_key": st.secrets["SERPAPI_KEY"]
+    }
+
+    logs = [f"🔍 Buscando: {cargo} - {local}"]
+
     try:
-        with DDGS() as ddgs:
-            # A ÚNICA MUDANÇA: Forçar a conversão para lista para evitar erro de iteração no Streamlit
-            results = list(ddgs.text(query, max_results=20))
-            if results:
-                for r in results:
-                    link = r['href'].lower()
-                    if any(p in link for p in ['/jobs/', '/job/', '/viewjob', '/remote-jobs/']):
-                        vagas_validas.append(r)
-                    else:
-                        logs.append(f"🚫 Ignorado: {link[:50]}...")
-            else:
-                logs.append("⚠️ O buscador não retornou dados brutos.")
+        response = requests.get(url, params=params)
+        data = response.json()
+
+        vagas = []
+
+        for job in data.get("jobs_results", []):
+            vagas.append({
+                "title": job.get("title"),
+                "company": job.get("company_name"),
+                "location": job.get("location"),
+                "description": job.get("description"),
+                "via": job.get("via"),
+                "link": job.get("related_links", [{}])[0].get("link")
+            })
+
+        if not vagas:
+            logs.append("⚠️ Nenhuma vaga encontrada.")
+
+        return vagas, logs
+
     except Exception as e:
-        logs.append(f"🚨 Erro técnico: {str(e)}")
-    
-    return vagas_validas, logs
+        logs.append(f"🚨 Erro: {str(e)}")
+        return [], logs
 
 # =========================
-# 3) INTERFACE (UI/UX)
+# SIDEBAR
 # =========================
 st.sidebar.title("🤖 Agent Command Center")
-app_mode = st.sidebar.radio("Módulo:", ["🔍 Motor de Busca", "📄 Gerador de Currículo"])
+
+app_mode = st.sidebar.radio(
+    "Módulo:",
+    ["🔍 Buscar Vagas", "📄 Adaptar Currículo"]
+)
 
 st.sidebar.divider()
-st.sidebar.subheader("Sua Base de Dados")
-matrix_input = st.sidebar.file_uploader("Sincronizar Matriz JSON", type=["json"])
+st.sidebar.subheader("Sincronizar Perfil")
+
+matrix_input = st.sidebar.file_uploader("Enviar Matriz JSON", type=["json"])
 
 if matrix_input:
     matrix_data = json.load(matrix_input)
-    conn.execute("INSERT OR REPLACE INTO user_profile (id, matrix_json, last_updated) VALUES (1, ?, datetime('now'))", 
-                 (json.dumps(matrix_data),))
+    conn.execute(
+        "INSERT OR REPLACE INTO user_profile (id, matrix_json, last_updated) VALUES (1, ?, datetime('now'))",
+        (json.dumps(matrix_data),)
+    )
     conn.commit()
     st.sidebar.success("✅ Perfil salvo!")
 
-# --- MÓDULO BUSCA ---
-if app_mode == "🔍 Motor de Busca":
-    st.header("🔍 Motor de Busca Ativa (7 dias)")
-    st.caption(f"Data de referência: {datetime.now().strftime('%d/%m/%Y')}")
+# =========================
+# MÓDULO BUSCA
+# =========================
+if app_mode == "🔍 Buscar Vagas":
+    st.header("🔍 Google Jobs – Busca Inteligente")
+    st.caption(f"Data: {datetime.now().strftime('%d/%m/%Y')}")
 
     col1, col2 = st.columns(2)
+
     with col1:
         cargo_q = st.text_input("Cargo:", value="Android Developer")
-    with col2:
-        local_q = st.text_input("Localidade:", value="Remote")
 
-    if st.button("Agente, iniciar varredura", use_container_width=True):
+    with col2:
+        local_q = st.text_input("Localização:", value="Remote United States")
+
+    if st.button("🚀 Iniciar Busca", use_container_width=True):
         vagas, logs_debug = agente_explorer_vagas(cargo_q, local_q)
-        
-        with st.expander("📝 Logs de Diagnóstico", expanded=True):
-            for l in logs_debug: st.text(l)
+
+        with st.expander("📝 Logs Técnicos"):
+            for l in logs_debug:
+                st.text(l)
 
         if vagas:
-            st.success(f"Encontramos {len(vagas)} vagas reais!")
+            st.success(f"🎯 Encontramos {len(vagas)} vagas!")
+
             for i, v in enumerate(vagas):
                 with st.container(border=True):
                     st.markdown(f"### {v['title']}")
-                    st.caption(f"🌍 [Ver Vaga no Portal]({v['href']})")
-                    st.write(v['body'])
-                    if st.button(f"Selecionar Vaga #{i+1}", key=f"btn_{i}"):
-                        st.session_state['vaga_ativa'] = v['body']
-                        st.success("Vaga carregada!")
-        else:
-            st.warning("Nenhuma vaga listada. Tente remover as aspas do cargo se o erro persistir.")
+                    st.markdown(f"**Empresa:** {v['company']}")
+                    st.markdown(f"📍 {v['location']}")
+                    st.markdown(f"🔗 [Ver Vaga]({v['link']})")
+                    st.write(v['description'][:600] + "...")
 
-# --- MÓDULO GERADOR ---
-elif app_mode == "📄 Gerador de Currículo":
-    st.header("📄 Adaptador de Perfil Profissional")
-    
+                    if st.button(f"Selecionar Vaga #{i+1}", key=f"vaga_{i}"):
+                        st.session_state["vaga_ativa"] = v
+                        st.success("Vaga selecionada!")
+        else:
+            st.warning("Nenhuma vaga encontrada.")
+
+# =========================
+# MÓDULO CURRÍCULO
+# =========================
+elif app_mode == "📄 Adaptar Currículo":
+
+    st.header("📄 Adaptador Inteligente")
+
     row = conn.execute("SELECT matrix_json FROM user_profile WHERE id = 1").fetchone()
+
     if not row:
-        st.warning("⚠️ Carregue sua Matriz no menu lateral primeiro.")
+        st.warning("⚠️ Envie sua Matriz JSON primeiro.")
         st.stop()
-    
-    vaga_selecionada = st.session_state.get('vaga_ativa', "")
-    st.text_area("Descrição enviada pelo Agente:", value=vaga_selecionada, height=200)
-    
-    if st.button("Gerar Currículo Otimizado"):
-        with st.spinner("IA processando..."):
-            prompt = f"Adapte o perfil {row[0]} para esta vaga: {vaga_selecionada}. Retorne Markdown."
-            resp = client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
-            st.success("Currículo Adaptado!")
+
+    vaga = st.session_state.get("vaga_ativa", None)
+
+    if not vaga:
+        st.warning("⚠️ Selecione uma vaga no módulo de busca.")
+        st.stop()
+
+    st.subheader("📌 Vaga Selecionada")
+    st.write(f"**{vaga['title']} – {vaga['company']}**")
+    st.write(vaga["description"][:800] + "...")
+
+    if st.button("🧠 Gerar Currículo Otimizado", use_container_width=True):
+        with st.spinner("IA adaptando seu perfil..."):
+
+            prompt = f"""
+Adapte o perfil abaixo para esta vaga.
+
+PERFIL:
+{row[0]}
+
+VAGA:
+{vaga['description']}
+
+Retorne em Markdown profissional otimizado para ATS.
+"""
+
+            resp = client.models.generate_content(
+                model="gemini-2.0-flash",
+                contents=prompt
+            )
+
+            st.success("✅ Currículo gerado!")
             st.markdown(resp.text)
