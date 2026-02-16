@@ -1,15 +1,17 @@
 import streamlit as st
 import json
 import sqlite3
+import re
 from google import genai
 from duckduckgo_search import DDGS
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # =========================
 # 1) SEGURANÇA E BANCO DE DADOS
 # =========================
 st.set_page_config(page_title="Agente de Carreira AI", layout="wide", page_icon="🚀")
 
+# A chave deve estar no painel do Streamlit Cloud
 if "GOOGLE_API_KEY" not in st.secrets:
     st.error("🚨 ERRO: Configure a GOOGLE_API_KEY nos Secrets do Streamlit!")
     st.stop()
@@ -29,10 +31,10 @@ def init_db():
 conn = init_db()
 
 # =========================
-# 2) MOTOR DE BUSCA (RESTAURADO DO ORIGINAL)
+# 2) MOTOR DE BUSCA (ESTRUTURA ORIGINAL)
 # =========================
 def agente_explorer_vagas(cargo, local):
-    # Voltando EXATAMENTE para a sua query original que funcionava
+    # Sua Query Original
     query = (
         f'"{cargo}" {local} '
         f'(site:linkedin.com/jobs/view OR site:glassdoor.com/Job OR site:flexjobs.com OR site:remote.co) '
@@ -44,12 +46,11 @@ def agente_explorer_vagas(cargo, local):
     
     try:
         with DDGS() as ddgs:
-            # Pegando os resultados brutos como no seu primeiro código
-            results = ddgs.text(query, max_results=20)
+            # A ÚNICA MUDANÇA: Forçar a conversão para lista para evitar erro de iteração no Streamlit
+            results = list(ddgs.text(query, max_results=20))
             if results:
                 for r in results:
                     link = r['href'].lower()
-                    # RF-01: Sua validação original
                     if any(p in link for p in ['/jobs/', '/job/', '/viewjob', '/remote-jobs/']):
                         vagas_validas.append(r)
                     else:
@@ -76,7 +77,7 @@ if matrix_input:
     conn.execute("INSERT OR REPLACE INTO user_profile (id, matrix_json, last_updated) VALUES (1, ?, datetime('now'))", 
                  (json.dumps(matrix_data),))
     conn.commit()
-    st.sidebar.success("✅ Perfil salvo no SQLite!")
+    st.sidebar.success("✅ Perfil salvo!")
 
 # --- MÓDULO BUSCA ---
 if app_mode == "🔍 Motor de Busca":
@@ -102,12 +103,11 @@ if app_mode == "🔍 Motor de Busca":
                     st.markdown(f"### {v['title']}")
                     st.caption(f"🌍 [Ver Vaga no Portal]({v['href']})")
                     st.write(v['body'])
-                    # Botão para levar a vaga para o gerador
                     if st.button(f"Selecionar Vaga #{i+1}", key=f"btn_{i}"):
                         st.session_state['vaga_ativa'] = v['body']
-                        st.success("Vaga carregada para o Gerador!")
+                        st.success("Vaga carregada!")
         else:
-            st.warning("Nenhuma vaga listada. Verifique os logs de diagnóstico.")
+            st.warning("Nenhuma vaga listada. Tente remover as aspas do cargo se o erro persistir.")
 
 # --- MÓDULO GERADOR ---
 elif app_mode == "📄 Gerador de Currículo":
@@ -119,16 +119,11 @@ elif app_mode == "📄 Gerador de Currículo":
         st.stop()
     
     vaga_selecionada = st.session_state.get('vaga_ativa', "")
-    desc_vaga = st.text_area("Descrição enviada pelo Agente:", value=vaga_selecionada, height=200)
+    st.text_area("Descrição enviada pelo Agente:", value=vaga_selecionada, height=200)
     
     if st.button("Gerar Currículo Otimizado"):
-        with st.spinner("IA processando sua matriz..."):
-            prompt = f"Adapte o perfil {row[0]} para esta vaga: {desc_vaga}. Retorne em Markdown bem formatado."
-            try:
-                resp = client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
-                st.success("Currículo Adaptado com Sucesso!")
-                st.markdown(resp.text)
-            except Exception as e:
-                st.error(f"Erro na IA: {e}")
-
-conn.close()
+        with st.spinner("IA processando..."):
+            prompt = f"Adapte o perfil {row[0]} para esta vaga: {vaga_selecionada}. Retorne Markdown."
+            resp = client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
+            st.success("Currículo Adaptado!")
+            st.markdown(resp.text)
