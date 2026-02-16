@@ -82,3 +82,76 @@ if matrix_input:
                  (json.dumps(matrix_data),))
     conn.commit()
     st.sidebar.success("✅ Matriz sincronizada!")
+
+# =========================
+# 4) MÓDULO: MOTOR DE BUSCA (LINKS DIRECIONADOS)
+# =========================
+if app_mode == "🔍 Motor de Busca":
+    st.title("🔍 Busca em Portais Selecionados")
+    
+    hoje = datetime.now()
+    data_7_dias = hoje - timedelta(days=7)
+    st.info(f"Buscando no LinkedIn, FlexJobs, Glassdoor e Remote.co desde {data_7_dias.strftime('%d/%m/%Y')}.")
+
+    col1, col2 = st.columns(2)
+    with col1: cargo = st.text_input("Cargo:", value="Product Manager")
+    with col2: local = st.text_input("Local:", value="Remote")
+
+    if st.button("Agente, buscar vagas recentes", use_container_width=True):
+        with st.spinner("Consultando bases de dados..."):
+            # Query focada nos seus 4 portais específicos
+            sites = ["linkedin.com/jobs", "flexjobs.com", "glassdoor.com/Job", "remote.co"]
+            site_query = " OR ".join([f"site:{s}" for s in sites])
+            full_query = f'"{cargo}" {local} ({site_query})'
+            
+            try:
+                with DDGS() as ddgs:
+                    results = [r for r in ddgs.text(full_query, max_results=15)]
+
+                if results:
+                    st.success(f"Encontramos {len(results)} vagas!")
+                    for i, res in enumerate(results):
+                        with st.container(border=True):
+                            st.markdown(f"### {res['title']}")
+                            st.caption(f"📍 [Abrir vaga no portal]({res['href']})")
+                            st.write(res['body'])
+                            if st.button(f"Selecionar Vaga #{i+1}", key=f"sel_{i}"):
+                                st.session_state['vaga_ativa'] = res['body']
+                                st.session_state['titulo_vaga_ativa'] = res['title']
+                                st.success("Vaga carregada!")
+                else:
+                    st.warning("Nenhuma vaga encontrada nesses sites. Tente remover o filtro de local.")
+            except Exception as e:
+                st.error(f"Erro na busca: {e}")
+
+# =========================
+# 5) MÓDULO: GERADOR DE CURRÍCULO
+# =========================
+elif app_mode == "📄 Gerador de Currículo":
+    st.title("📄 Gerador de CV Adaptado")
+    row = conn.execute("SELECT matrix_json FROM user_profile WHERE id = 1").fetchone()
+    if not row:
+        st.warning("⚠️ Carregue sua Matriz no menu lateral.")
+        st.stop()
+    
+    saved_matrix = json.loads(row[0])
+    vaga_auto = st.session_state.get('vaga_ativa', "")
+    
+    job_desc = st.text_area("Descrição da vaga:", value=vaga_auto, height=250)
+    
+    if st.button("Gerar Currículo Otimizado", use_container_width=True):
+        with st.spinner("IA adaptando keywords..."):
+            prompt = f"Como Tech Recruiter, use a matriz {json.dumps(saved_matrix)} e adapte para a vaga: {job_desc}. Retorne APENAS o JSON estruturado."
+            resp = client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
+            try:
+                data = extract_json_loose(get_response_text(resp))
+                st.session_state['cv_gerado'] = data
+                st.success("Gerado!")
+            except Exception as e:
+                st.error(f"Erro no JSON da IA: {e}")
+
+    if 'cv_gerado' in st.session_state:
+        cv_data = st.session_state['cv_gerado'].get("cv", {})
+        html_content = f"<html><body><div style='background:white; padding:30px; color:black;'>{render_ats_html(cv_data)}</div></body></html>"
+        components.html(html_content, height=800, scrolling=True)
+        st.download_button("📥 Baixar CV", data=html_content, file_name="Curriculo.doc", mime="application/msword")
