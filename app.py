@@ -69,4 +69,68 @@ def agente_explorer_vagas(cargo, local):
     return vagas_validas, logs
 
 # =========================
-#
+# 3) INTERFACE (UI/UX)
+# =========================
+st.sidebar.title("🤖 Agent Command Center")
+app_mode = st.sidebar.radio("Módulo:", ["🔍 Motor de Busca", "📄 Gerador de Currículo"])
+
+st.sidebar.divider()
+st.sidebar.subheader("Sua Base de Dados")
+matrix_input = st.sidebar.file_uploader("Sincronizar Matriz JSON", type=["json"])
+
+if matrix_input:
+    matrix_data = json.load(matrix_input)
+    conn.execute("INSERT OR REPLACE INTO user_profile (id, matrix_json, last_updated) VALUES (1, ?, datetime('now'))", 
+                 (json.dumps(matrix_data),))
+    conn.commit()
+    st.sidebar.success("✅ Perfil salvo no SQLite!")
+
+# --- MÓDULO BUSCA ---
+if app_mode == "🔍 Motor de Busca":
+    st.header("🔍 Motor de Busca Ativa (7 dias)")
+    st.caption(f"Data de referência: {datetime.now().strftime('%d/%m/%Y')}")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        cargo_q = st.text_input("Cargo:", value="Android Developer")
+    with col2:
+        local_q = st.text_input("Localidade:", value="Remote")
+
+    if st.button("Agente, iniciar varredura", use_container_width=True):
+        vagas, logs_debug = agente_explorer_vagas(cargo_q, local_q)
+        
+        with st.expander("📝 Logs de Diagnóstico"):
+            for l in logs_debug: st.text(l)
+
+        if vagas:
+            st.success(f"Encontramos {len(vagas)} vagas reais!")
+            for i, v in enumerate(vagas):
+                with st.container(border=True):
+                    st.markdown(f"### {v['title']}")
+                    st.caption(f"🌍 [Ver Vaga no Portal]({v['href']})")
+                    st.write(v['body'])
+                    if st.button(f"Selecionar Vaga #{i+1}", key=f"btn_{i}"):
+                        st.session_state['vaga_ativa'] = v['body']
+                        st.success("Vaga carregada para o Gerador!")
+        else:
+            st.warning("Nenhuma vaga listada. Verifique os logs de diagnóstico.")
+
+# --- MÓDULO GERADOR ---
+elif app_mode == "📄 Gerador de Currículo":
+    st.header("📄 Adaptador de Perfil Profissional")
+    
+    # Carrega matriz do banco local
+    row = conn.execute("SELECT matrix_json FROM user_profile WHERE id = 1").fetchone()
+    if not row:
+        st.warning("⚠️ Carregue sua Matriz no menu lateral primeiro.")
+        st.stop()
+    
+    vaga_selecionada = st.session_state.get('vaga_ativa', "")
+    st.text_area("Descrição enviada pelo Agente:", value=vaga_selecionada, height=200)
+    
+    if st.button("Gerar Currículo Otimizado"):
+        with st.spinner("IA processando sua matriz..."):
+            prompt = f"Adapte o perfil {row[0]} para esta vaga: {vaga_selecionada}. Retorne JSON formatado."
+            resp = client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
+            st.success("Currículo Adaptado com Sucesso!")
+            st.markdown(resp.text)
