@@ -35,10 +35,6 @@ client = genai.Client(api_key=st.secrets["GOOGLE_API_KEY"])
 # =========================
 # 2) HELPERS
 # =========================
-def get_response_text(response) -> str:
-    try: return response.text if hasattr(response, "text") else response.candidates[0].content.parts[0].text
-    except: return ""
-
 def extract_json_loose(text: str) -> dict:
     text = (text or "").strip().replace("```json", "").replace("```", "").strip()
     i = text.find("{")
@@ -74,6 +70,7 @@ st.sidebar.title("🤖 Agent Command Center")
 app_mode = st.sidebar.radio("Selecione o Módulo:", ["🔍 Motor de Busca", "📄 Gerador de Currículo"])
 
 st.sidebar.divider()
+st.sidebar.subheader("⚙️ Configurações Base")
 matrix_input = st.sidebar.file_uploader("Atualizar Matriz JSON", type=["json"])
 
 if matrix_input:
@@ -84,51 +81,58 @@ if matrix_input:
     st.sidebar.success("✅ Matriz sincronizada!")
 
 # =========================
-# 4) MÓDULO: MOTOR DE BUSCA (LINKS DIRECIONADOS)
+# 4) MÓDULO: MOTOR DE BUSCA (FLEXÍVEL)
 # =========================
 if app_mode == "🔍 Motor de Busca":
-    st.title("🔍 Busca em Portais Selecionados")
+    st.title("🔍 Motor de Busca Inteligente")
+    st.info("Busca automática em LinkedIn, Glassdoor, FlexJobs e Remote.co.")
     
-    hoje = datetime.now()
-    data_7_dias = hoje - timedelta(days=7)
-    st.info(f"Buscando no LinkedIn, FlexJobs, Glassdoor e Remote.co desde {data_7_dias.strftime('%d/%m/%Y')}.")
-
     col1, col2 = st.columns(2)
-    with col1: cargo = st.text_input("Cargo:", value="Product Manager")
-    with col2: local = st.text_input("Local:", value="Remote")
+    with col1:
+        cargo_input = st.text_input("Cargo ou Tecnologia:", value="Android Developer")
+    with col2:
+        local_input = st.text_input("Localização (Ex: Houston ou Remote):", value="Remote")
 
-    if st.button("Agente, buscar vagas recentes", use_container_width=True):
-        with st.spinner("Consultando bases de dados..."):
-            # Query focada nos seus 4 portais específicos
-            sites = ["linkedin.com/jobs", "flexjobs.com", "glassdoor.com/Job", "remote.co"]
-            site_query = " OR ".join([f"site:{s}" for s in sites])
-            full_query = f'"{cargo}" {local} ({site_query})'
+    if st.button("Agente, buscar vagas agora", use_container_width=True):
+        log_exp = st.expander("📝 Logs de Busca", expanded=True)
+        with st.spinner("O Agente está varrendo a web..."):
+            
+            # Lógica para aceitar variações de nomes (Android, Desenvolvedor, Developer)
+            termos = f'("{cargo_input}" OR "Android Developer" OR "Desenvolvedor Android")'
+            portais = "(LinkedIn OR Glassdoor OR FlexJobs OR Remote.co)"
+            
+            # Query otimizada para 7 dias em 2026
+            query = f'{termos} {local_input} {portais} jobs'
+            log_exp.write(f"🔍 Buscando por: `{query}`")
             
             try:
                 with DDGS() as ddgs:
-                    results = [r for r in ddgs.text(full_query, max_results=15)]
+                    # Buscamos um volume maior para filtrar os melhores
+                    raw_results = ddgs.text(query, max_results=15)
+                    results = [r for r in raw_results] if raw_results else []
 
                 if results:
-                    st.success(f"Encontramos {len(results)} vagas!")
+                    log_exp.write(f"✅ {len(results)} resultados encontrados.")
                     for i, res in enumerate(results):
                         with st.container(border=True):
                             st.markdown(f"### {res['title']}")
-                            st.caption(f"📍 [Abrir vaga no portal]({res['href']})")
+                            st.caption(f"🔗 [Link da Vaga]({res['href']})")
                             st.write(res['body'])
                             if st.button(f"Selecionar Vaga #{i+1}", key=f"sel_{i}"):
                                 st.session_state['vaga_ativa'] = res['body']
-                                st.session_state['titulo_vaga_ativa'] = res['title']
-                                st.success("Vaga carregada!")
+                                st.success("Vaga carregada com sucesso!")
                 else:
-                    st.warning("Nenhuma vaga encontrada nesses sites. Tente remover o filtro de local.")
+                    log_exp.write("⚠️ Nenhum resultado retornado do buscador.")
+                    st.warning("Tente simplificar o cargo (Ex: use apenas 'Android').")
             except Exception as e:
-                st.error(f"Erro na busca: {e}")
+                log_exp.write(f"🚨 Erro na busca: {str(e)}")
+                st.error("Falha na conexão com o motor de busca.")
 
 # =========================
 # 5) MÓDULO: GERADOR DE CURRÍCULO
 # =========================
 elif app_mode == "📄 Gerador de Currículo":
-    st.title("📄 Gerador de CV Adaptado")
+    st.title("📄 Gerador de CV Inteligente")
     row = conn.execute("SELECT matrix_json FROM user_profile WHERE id = 1").fetchone()
     if not row:
         st.warning("⚠️ Carregue sua Matriz no menu lateral.")
@@ -137,21 +141,23 @@ elif app_mode == "📄 Gerador de Currículo":
     saved_matrix = json.loads(row[0])
     vaga_auto = st.session_state.get('vaga_ativa', "")
     
-    job_desc = st.text_area("Descrição da vaga:", value=vaga_auto, height=250)
+    job_desc = st.text_area("Descrição da vaga carregada:", value=vaga_auto, height=250)
     
     if st.button("Gerar Currículo Otimizado", use_container_width=True):
-        with st.spinner("IA adaptando keywords..."):
-            prompt = f"Como Tech Recruiter, use a matriz {json.dumps(saved_matrix)} e adapte para a vaga: {job_desc}. Retorne APENAS o JSON estruturado."
+        with st.spinner("IA processando seu currículo..."):
+            prompt = f"Como Recrutador Tech, adapte a matriz {json.dumps(saved_matrix)} para a vaga: {job_desc}. Foque em competências técnicas de Android. Retorne JSON."
+            
+            # Uso da API paga (Gemini 2.0 Flash)
             resp = client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
             try:
-                data = extract_json_loose(get_response_text(resp))
+                data = extract_json_loose(resp.text)
                 st.session_state['cv_gerado'] = data
-                st.success("Gerado!")
-            except Exception as e:
-                st.error(f"Erro no JSON da IA: {e}")
+                st.success("Currículo Gerado!")
+            except:
+                st.error("Erro ao gerar o currículo.")
 
     if 'cv_gerado' in st.session_state:
         cv_data = st.session_state['cv_gerado'].get("cv", {})
-        html_content = f"<html><body><div style='background:white; padding:30px; color:black;'>{render_ats_html(cv_data)}</div></body></html>"
+        html_content = f"<html><body><div style='background:white; padding:40px; color:black;'>{render_ats_html(cv_data)}</div></body></html>"
         components.html(html_content, height=800, scrolling=True)
-        st.download_button("📥 Baixar CV", data=html_content, file_name="Curriculo.doc", mime="application/msword")
+        st.download_button("📥 Baixar CV", data=html_content, file_name="Curriculo_Android.doc", mime="application/msword")
