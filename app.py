@@ -1,7 +1,6 @@
 import streamlit as st
 import json
 import sqlite3
-import re
 from google import genai
 from duckduckgo_search import DDGS
 from datetime import datetime
@@ -22,67 +21,60 @@ def init_db():
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS user_profile 
                  (id INTEGER PRIMARY KEY, matrix_json TEXT, last_updated DATETIME)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS job_log 
-                 (id INTEGER PRIMARY KEY, title TEXT, company TEXT, link TEXT, status TEXT)''')
     conn.commit()
     return conn
 
 conn = init_db()
 
 # =========================
-# 2) MOTOR DE BUSCA (Lógica Original Restaurada)
+# 2) MOTOR DE BUSCA (REVISADO)
 # =========================
 def agente_explorer_vagas(cargo, local):
-    # RN-01 e RN-02 aplicadas na query
-    query = (
-        f'"{cargo}" {local} '
-        f'(site:linkedin.com/jobs/view OR site:glassdoor.com/Job OR site:flexjobs.com OR site:remote.co) '
-        f'-intitle:"help" -intitle:"ajuda" -intitle:"support" -intitle:"check"'
-    )
+    # Simplificação da query para evitar bloqueio e aumentar resultados
+    query = f'"{cargo}" {local} (site:linkedin.com OR site:glassdoor.com OR site:remote.co) jobs'
     
     vagas_validas = []
-    logs = [f"🔍 Buscando: {query}"]
+    logs = [f"🔍 Buscando por: {query}"]
     
     try:
         with DDGS() as ddgs:
-            results = ddgs.text(query, max_results=20)
+            # Reduzi para 10 para ser mais rápido e evitar timeout
+            results = list(ddgs.text(query, max_results=10))
+            
             if results:
                 for r in results:
-                    link = r['href'].lower()
-                    # RF-01: Validação de URL de vaga
-                    if any(p in link for p in ['/jobs/', '/job/', '/viewjob', '/remote-jobs/']):
+                    # Filtro básico de link
+                    link = r.get('href', '').lower()
+                    if any(x in link for x in ['job', 'view', 'vacancy', 'career']):
                         vagas_validas.append(r)
                     else:
-                        logs.append(f"🚫 Ignorado: {link[:50]}...")
+                        logs.append(f"🚫 Link descartado: {link[:40]}...")
             else:
-                logs.append("⚠️ O buscador não retornou dados brutos.")
+                logs.append("⚠️ DuckDuckGo não retornou resultados. Tente termos mais genéricos.")
     except Exception as e:
-        logs.append(f"🚨 Erro técnico: {str(e)}")
+        logs.append(f"🚨 Erro na busca: {str(e)}")
     
     return vagas_validas, logs
 
 # =========================
-# 3) INTERFACE (UI/UX)
+# 3) INTERFACE
 # =========================
 st.sidebar.title("🤖 Agent Command Center")
 app_mode = st.sidebar.radio("Módulo:", ["🔍 Motor de Busca", "📄 Gerador de Currículo"])
 
-st.sidebar.divider()
-st.sidebar.subheader("Sua Base de Dados")
+# Persistência da Matriz
 matrix_input = st.sidebar.file_uploader("Sincronizar Matriz JSON", type=["json"])
-
 if matrix_input:
     matrix_data = json.load(matrix_input)
     conn.execute("INSERT OR REPLACE INTO user_profile (id, matrix_json, last_updated) VALUES (1, ?, datetime('now'))", 
                  (json.dumps(matrix_data),))
     conn.commit()
-    st.sidebar.success("✅ Perfil salvo no SQLite!")
+    st.sidebar.success("✅ Perfil sincronizado!")
 
 # --- MÓDULO BUSCA ---
 if app_mode == "🔍 Motor de Busca":
-    st.header("🔍 Motor de Busca Ativa (7 dias)")
-    st.caption(f"Data de referência: {datetime.now().strftime('%d/%m/%Y')}")
-
+    st.header("🔍 Motor de Busca Ativa")
+    
     col1, col2 = st.columns(2)
     with col1:
         cargo_q = st.text_input("Cargo:", value="Android Developer")
@@ -96,51 +88,38 @@ if app_mode == "🔍 Motor de Busca":
             for l in logs_debug: st.text(l)
 
         if vagas:
-            st.success(f"Encontramos {len(vagas)} vagas reais!")
+            st.success(f"Sucesso! {len(vagas)} vagas encontradas.")
             for i, v in enumerate(vagas):
                 with st.container(border=True):
-                    st.markdown(f"### {v['title']}")
-                    st.caption(f"🌍 [Ver Vaga no Portal]({v['href']})")
-                    st.write(v['body'])
-                    # O botão agora salva corretamente no session_state
-                    if st.button(f"Selecionar Vaga #{i+1}", key=f"btn_{i}"):
-                        st.session_state['vaga_ativa'] = v['body']
-                        st.session_state['vaga_titulo_selecionado'] = v['title']
-                        st.toast(f"Vaga {i+1} carregada!")
+                    st.subheader(v.get('title', 'Vaga sem título'))
+                    st.write(v.get('body', 'Sem descrição disponível.'))
+                    st.caption(f"🔗 [Link da Vaga]({v.get('href')})")
+                    
+                    if st.button(f"Selecionar Vaga #{i+1}", key=f"sel_{i}"):
+                        st.session_state['vaga_ativa'] = v.get('body')
+                        st.success("Vaga enviada para o Gerador!")
         else:
-            st.warning("Nenhuma vaga listada. Verifique os logs de diagnóstico.")
+            st.error("Nenhuma vaga encontrada. O buscador retornou vazio.")
 
 # --- MÓDULO GERADOR ---
 elif app_mode == "📄 Gerador de Currículo":
-    st.header("📄 Adaptador de Perfil Profissional")
+    st.header("📄 Adaptador Profissional")
     
     row = conn.execute("SELECT matrix_json FROM user_profile WHERE id = 1").fetchone()
     if not row:
-        st.warning("⚠️ Carregue sua Matriz no menu lateral primeiro.")
+        st.warning("⚠️ Carregue sua Matriz JSON lateralmente.")
         st.stop()
     
-    vaga_selecionada = st.session_state.get('vaga_ativa', "")
-    vaga_nome = st.session_state.get('vaga_titulo_selecionado', "Nenhuma vaga selecionada")
-    
-    st.subheader(f"Analisando: {vaga_nome}")
-    desc_input = st.text_area("Descrição da Vaga:", value=vaga_selecionada, height=200)
+    vaga_txt = st.session_state.get('vaga_ativa', "")
+    desc_vaga = st.text_area("Descrição da Vaga selecionada:", value=vaga_txt, height=200)
     
     if st.button("Gerar Currículo Otimizado"):
-        if not desc_input:
-            st.error("Selecione uma vaga primeiro ou cole a descrição acima.")
-        else:
-            with st.spinner("IA processando sua matriz..."):
-                prompt = (
-                    f"Você é um especialista em recrutamento técnico. Adapte o perfil profissional contido neste "
-                    f"JSON: {row[0]} para a seguinte vaga: {desc_input}. "
-                    f"Foque em resultados, palavras-chave da vaga e use Markdown para formatar o currículo final."
-                )
-                try:
-                    resp = client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
-                    st.success("Currículo Adaptado com Sucesso!")
-                    st.markdown("---")
-                    st.markdown(resp.text)
-                except Exception as e:
-                    st.error(f"Erro na geração: {e}")
+        with st.spinner("Gemini trabalhando..."):
+            prompt = f"Com base neste perfil: {row[0]}, adapte um currículo para esta vaga: {desc_vaga}. Retorne em Markdown."
+            try:
+                resp = client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
+                st.markdown(resp.text)
+            except Exception as e:
+                st.error(f"Erro IA: {e}")
 
 conn.close()
