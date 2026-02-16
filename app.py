@@ -5,14 +5,14 @@ import requests
 from google import genai
 from datetime import datetime
 
-# =========================
-# CONFIGURAÇÃO INICIAL
-# =========================
+# ==========================================
+# CONFIGURAÇÃO
+# ==========================================
 st.set_page_config(page_title="Agente de Carreira AI", layout="wide", page_icon="🚀")
 
-# =========================
-# VERIFICAÇÃO DE CHAVES
-# =========================
+# ==========================================
+# VALIDAÇÃO DE CHAVES
+# ==========================================
 if "GOOGLE_API_KEY" not in st.secrets:
     st.error("🚨 Configure GOOGLE_API_KEY no Streamlit Secrets.")
     st.stop()
@@ -23,24 +23,31 @@ if "SERPAPI_KEY" not in st.secrets:
 
 client = genai.Client(api_key=st.secrets["GOOGLE_API_KEY"])
 
-# =========================
-# BANCO DE DADOS
-# =========================
+# ==========================================
+# BANCO
+# ==========================================
 def init_db():
-    conn = sqlite3.connect('career_agent.db', check_same_thread=False)
+    conn = sqlite3.connect("career_agent.db", check_same_thread=False)
     c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS user_profile 
-                 (id INTEGER PRIMARY KEY, matrix_json TEXT, last_updated DATETIME)''')
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS user_profile (
+            id INTEGER PRIMARY KEY,
+            matrix_json TEXT,
+            last_updated DATETIME
+        )
+    """)
     conn.commit()
     return conn
 
 conn = init_db()
 
-# =========================
-# MOTOR DE BUSCA – GOOGLE JOBS
-# =========================
+# ==========================================
+# MOTOR DE BUSCA – GOOGLE JOBS (ROBUSTO)
+# ==========================================
 def agente_explorer_vagas(cargo, local):
     url = "https://serpapi.com/search.json"
+    logs = []
+    vagas = []
 
     params = {
         "engine": "google_jobs",
@@ -49,26 +56,34 @@ def agente_explorer_vagas(cargo, local):
         "api_key": st.secrets["SERPAPI_KEY"]
     }
 
-    logs = [f"🔍 Buscando: {cargo} - {local}"]
-
     try:
         response = requests.get(url, params=params)
         data = response.json()
 
-        vagas = []
+        jobs = data.get("jobs_results", [])
+        logs.append(f"🔍 {len(jobs)} vagas encontradas na API.")
 
-        for job in data.get("jobs_results", []):
+        for job in jobs:
+
+            # ===== Link Principal =====
+            link = None
+
+            # 1) related_links
+            if job.get("related_links"):
+                link = job["related_links"][0].get("link")
+
+            # 2) apply_options
+            if not link and job.get("apply_options"):
+                link = job["apply_options"][0].get("link")
+
             vagas.append({
                 "title": job.get("title"),
                 "company": job.get("company_name"),
                 "location": job.get("location"),
                 "description": job.get("description"),
-                "via": job.get("via"),
-                "link": job.get("related_links", [{}])[0].get("link")
+                "link": link,
+                "apply_options": job.get("apply_options", [])
             })
-
-        if not vagas:
-            logs.append("⚠️ Nenhuma vaga encontrada.")
 
         return vagas, logs
 
@@ -76,12 +91,12 @@ def agente_explorer_vagas(cargo, local):
         logs.append(f"🚨 Erro: {str(e)}")
         return [], logs
 
-# =========================
+# ==========================================
 # SIDEBAR
-# =========================
+# ==========================================
 st.sidebar.title("🤖 Agent Command Center")
 
-app_mode = st.sidebar.radio(
+modo = st.sidebar.radio(
     "Módulo:",
     ["🔍 Buscar Vagas", "📄 Adaptar Currículo"]
 )
@@ -100,49 +115,68 @@ if matrix_input:
     conn.commit()
     st.sidebar.success("✅ Perfil salvo!")
 
-# =========================
-# MÓDULO BUSCA
-# =========================
-if app_mode == "🔍 Buscar Vagas":
+# ==========================================
+# BUSCAR VAGAS
+# ==========================================
+if modo == "🔍 Buscar Vagas":
+
     st.header("🔍 Google Jobs – Busca Inteligente")
     st.caption(f"Data: {datetime.now().strftime('%d/%m/%Y')}")
 
     col1, col2 = st.columns(2)
 
     with col1:
-        cargo_q = st.text_input("Cargo:", value="Android Developer")
+        cargo = st.text_input("Cargo:", value="Android Developer")
 
     with col2:
-        local_q = st.text_input("Localização:", value="Remote United States")
+        local = st.text_input("Localização:", value="Remote United States")
 
     if st.button("🚀 Iniciar Busca", use_container_width=True):
-        vagas, logs_debug = agente_explorer_vagas(cargo_q, local_q)
+
+        vagas, logs = agente_explorer_vagas(cargo, local)
 
         with st.expander("📝 Logs Técnicos"):
-            for l in logs_debug:
+            for l in logs:
                 st.text(l)
 
         if vagas:
-            st.success(f"🎯 Encontramos {len(vagas)} vagas!")
+            st.success(f"🎯 {len(vagas)} vagas listadas!")
 
             for i, v in enumerate(vagas):
                 with st.container(border=True):
+
                     st.markdown(f"### {v['title']}")
                     st.markdown(f"**Empresa:** {v['company']}")
                     st.markdown(f"📍 {v['location']}")
-                    st.markdown(f"🔗 [Ver Vaga]({v['link']})")
-                    st.write(v['description'][:600] + "...")
+
+                    # ===== Link Principal =====
+                    if v["link"]:
+                        st.markdown(f"🔗 [Abrir Vaga Principal]({v['link']})")
+                    else:
+                        st.warning("⚠️ Link principal não disponível.")
+
+                    # ===== Múltiplos Apply Buttons =====
+                    if v["apply_options"]:
+                        st.markdown("**Candidatar-se via:**")
+                        for opt in v["apply_options"]:
+                            nome = opt.get("title", "Portal")
+                            link_apply = opt.get("link")
+                            if link_apply:
+                                st.markdown(f"- [{nome}]({link_apply})")
+
+                    st.write(v["description"][:600] + "...")
 
                     if st.button(f"Selecionar Vaga #{i+1}", key=f"vaga_{i}"):
                         st.session_state["vaga_ativa"] = v
                         st.success("Vaga selecionada!")
+
         else:
             st.warning("Nenhuma vaga encontrada.")
 
-# =========================
-# MÓDULO CURRÍCULO
-# =========================
-elif app_mode == "📄 Adaptar Currículo":
+# ==========================================
+# ADAPTAR CURRÍCULO
+# ==========================================
+elif modo == "📄 Adaptar Currículo":
 
     st.header("📄 Adaptador Inteligente")
 
@@ -152,7 +186,7 @@ elif app_mode == "📄 Adaptar Currículo":
         st.warning("⚠️ Envie sua Matriz JSON primeiro.")
         st.stop()
 
-    vaga = st.session_state.get("vaga_ativa", None)
+    vaga = st.session_state.get("vaga_ativa")
 
     if not vaga:
         st.warning("⚠️ Selecione uma vaga no módulo de busca.")
@@ -163,6 +197,7 @@ elif app_mode == "📄 Adaptar Currículo":
     st.write(vaga["description"][:800] + "...")
 
     if st.button("🧠 Gerar Currículo Otimizado", use_container_width=True):
+
         with st.spinner("IA adaptando seu perfil..."):
 
             prompt = f"""
@@ -174,7 +209,7 @@ PERFIL:
 VAGA:
 {vaga['description']}
 
-Retorne em Markdown profissional otimizado para ATS.
+Retorne um currículo em Markdown profissional otimizado para ATS.
 """
 
             resp = client.models.generate_content(
