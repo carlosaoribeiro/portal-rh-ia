@@ -6,10 +6,7 @@ from google import genai
 from datetime import datetime
 from io import BytesIO
 from docx import Document
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
-from reportlab.lib.styles import getSampleStyleSheet
-from reportlab.lib.pagesizes import letter
-from pypdf import PdfReader  # ✅ CORRETO
+from pypdf import PdfReader
 
 # ==========================================
 # CONFIGURAÇÃO
@@ -20,11 +17,11 @@ st.set_page_config(page_title="Agente de Carreira AI", layout="wide", page_icon=
 # VALIDAÇÃO DE CHAVES
 # ==========================================
 if "GOOGLE_API_KEY" not in st.secrets:
-    st.error("🚨 Configure GOOGLE_API_KEY no Streamlit Secrets.")
+    st.error("Configure GOOGLE_API_KEY no Streamlit Secrets.")
     st.stop()
 
 if "SERPAPI_KEY" not in st.secrets:
-    st.error("🚨 Configure SERPAPI_KEY no Streamlit Secrets.")
+    st.error("Configure SERPAPI_KEY no Streamlit Secrets.")
     st.stop()
 
 client = genai.Client(api_key=st.secrets["GOOGLE_API_KEY"])
@@ -48,14 +45,12 @@ def init_db():
 conn = init_db()
 
 # ==========================================
-# EXTRAIR TEXTO DE PDF/DOCX
+# EXTRAIR TEXTO
 # ==========================================
-import docx
-
-def extrair_texto_arquivo(uploaded_file):
+def extrair_texto(uploaded_file):
 
     if uploaded_file.type == "application/pdf":
-        reader = PdfReader(uploaded_file)  # ✅ USANDO pypdf
+        reader = PdfReader(uploaded_file)
         texto = ""
         for page in reader.pages:
             texto += page.extract_text() or ""
@@ -65,13 +60,13 @@ def extrair_texto_arquivo(uploaded_file):
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         "application/msword"
     ]:
-        doc = docx.Document(uploaded_file)
+        doc = Document(uploaded_file)
         return "\n".join([p.text for p in doc.paragraphs])
 
     return None
 
 # ==========================================
-# GERAR WORD
+# GERAR DOCX
 # ==========================================
 def gerar_docx(texto):
     doc = Document()
@@ -83,29 +78,25 @@ def gerar_docx(texto):
     return buffer
 
 # ==========================================
-# GERAR PDF
+# MATCH SIMPLES
 # ==========================================
-def gerar_pdf(texto):
-    buffer = BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=letter)
-    styles = getSampleStyleSheet()
-    elements = []
+def calcular_match(cv_texto, vaga_texto):
+    cv_words = set(cv_texto.lower().split())
+    vaga_words = set(vaga_texto.lower().split())
+    intersecao = cv_words.intersection(vaga_words)
 
-    for linha in texto.split("\n"):
-        elements.append(Paragraph(linha, styles["Normal"]))
-        elements.append(Spacer(1, 8))
+    if len(vaga_words) == 0:
+        return 0, []
 
-    doc.build(elements)
-    buffer.seek(0)
-    return buffer
+    score = int((len(intersecao) / len(vaga_words)) * 100)
+    return min(score, 100), list(intersecao)[:20]
 
 # ==========================================
-# MOTOR DE BUSCA – GOOGLE JOBS
+# BUSCA VAGAS
 # ==========================================
-def agente_explorer_vagas(cargo, local):
+def buscar_vagas(cargo, local):
+
     url = "https://serpapi.com/search.json"
-    logs = []
-    vagas = []
 
     params = {
         "engine": "google_jobs",
@@ -114,168 +105,128 @@ def agente_explorer_vagas(cargo, local):
         "api_key": st.secrets["SERPAPI_KEY"]
     }
 
-    try:
-        response = requests.get(url, params=params)
-        data = response.json()
+    response = requests.get(url, params=params)
+    data = response.json()
 
-        jobs = data.get("jobs_results", [])
-        logs.append(f"🔍 {len(jobs)} vagas encontradas na API.")
+    jobs = data.get("jobs_results", [])
+    vagas = []
 
-        for job in jobs:
-            link = None
+    for job in jobs:
+        vagas.append({
+            "title": job.get("title"),
+            "company": job.get("company_name"),
+            "location": job.get("location"),
+            "description": job.get("description")
+        })
 
-            if job.get("related_links"):
-                link = job["related_links"][0].get("link")
-
-            if not link and job.get("apply_options"):
-                link = job["apply_options"][0].get("link")
-
-            vagas.append({
-                "title": job.get("title"),
-                "company": job.get("company_name"),
-                "location": job.get("location"),
-                "description": job.get("description"),
-                "link": link,
-                "apply_options": job.get("apply_options", [])
-            })
-
-        return vagas, logs
-
-    except Exception as e:
-        logs.append(f"🚨 Erro: {str(e)}")
-        return [], logs
+    return vagas
 
 # ==========================================
 # SIDEBAR
 # ==========================================
-st.sidebar.title("🤖 Agent Command Center")
+st.sidebar.title("Agent Command Center")
 
 modo = st.sidebar.radio(
     "Módulo:",
-    ["🔍 Buscar Vagas", "📄 Adaptar Currículo"]
+    ["Buscar Vagas", "Adaptar Currículo"]
 )
 
 st.sidebar.divider()
-st.sidebar.subheader("Sincronizar Perfil")
+st.sidebar.subheader("Enviar Currículo")
 
 uploaded_file = st.sidebar.file_uploader(
-    "Enviar Arquivo (JSON, PDF, DOC, DOCX)",
-    type=["json", "pdf", "doc", "docx"]
+    "PDF ou Word",
+    type=["pdf", "doc", "docx"]
 )
 
 if uploaded_file:
-
-    if uploaded_file.type == "application/json":
-        matrix_data = json.load(uploaded_file)
-        conn.execute(
-            "INSERT OR REPLACE INTO user_profile (id, matrix_json, last_updated) VALUES (1, ?, datetime('now'))",
-            (json.dumps(matrix_data),)
-        )
-        conn.commit()
-        st.session_state["cv_text"] = None
-        st.sidebar.success("✅ Matriz JSON salva!")
-
-    else:
-        texto_cv = extrair_texto_arquivo(uploaded_file)
-        st.session_state["cv_text"] = texto_cv
-        st.sidebar.success("📄 Currículo carregado!")
+    texto_cv = extrair_texto(uploaded_file)
+    st.session_state["cv_text"] = texto_cv
+    st.sidebar.success("Currículo carregado!")
 
 # ==========================================
 # BUSCAR VAGAS
 # ==========================================
-if modo == "🔍 Buscar Vagas":
+if modo == "Buscar Vagas":
 
-    st.header("🔍 Google Jobs – Busca Inteligente")
-    st.caption(f"Data: {datetime.now().strftime('%d/%m/%Y')}")
+    st.header("Buscar Vagas")
 
-    col1, col2 = st.columns(2)
+    cargo = st.text_input("Cargo", "Android Developer")
+    local = st.text_input("Localização", "Remote")
 
-    with col1:
-        cargo = st.text_input("Cargo:", value="Android Developer")
+    if st.button("Buscar"):
 
-    with col2:
-        local = st.text_input("Localização:", value="Remote United States")
-
-    if st.button("🚀 Iniciar Busca", use_container_width=True):
-
-        vagas, logs = agente_explorer_vagas(cargo, local)
+        vagas = buscar_vagas(cargo, local)
 
         if vagas:
-            st.success(f"🎯 {len(vagas)} vagas listadas!")
-
             for i, v in enumerate(vagas):
                 with st.container(border=True):
+                    st.subheader(v["title"])
+                    st.write(v["company"])
+                    st.write(v["location"])
 
-                    st.markdown(f"### {v['title']}")
-                    st.markdown(f"**Empresa:** {v['company']}")
-                    st.markdown(f"📍 {v['location']}")
-
-                    if v["link"]:
-                        st.markdown(f"[Abrir Vaga Principal]({v['link']})")
-
-                    if st.button(f"Selecionar Vaga #{i+1}", key=f"vaga_{i}"):
+                    if st.button(f"Selecionar Vaga {i}", key=i):
                         st.session_state["vaga_ativa"] = v
                         st.success("Vaga selecionada!")
-
         else:
             st.warning("Nenhuma vaga encontrada.")
 
 # ==========================================
 # ADAPTAR CURRÍCULO
 # ==========================================
-elif modo == "📄 Adaptar Currículo":
+elif modo == "Adaptar Currículo":
 
-    st.header("📄 Adaptador Inteligente")
+    st.header("Adaptador Inteligente")
 
     vaga = st.session_state.get("vaga_ativa")
+    cv_texto = st.session_state.get("cv_text")
 
     if not vaga:
-        st.warning("⚠️ Selecione uma vaga primeiro.")
+        st.warning("Selecione uma vaga primeiro.")
         st.stop()
 
-    perfil_base = st.session_state.get("cv_text")
-
-    if not perfil_base:
-        st.warning("⚠️ Envie seu currículo primeiro.")
+    if not cv_texto:
+        st.warning("Envie seu currículo primeiro.")
         st.stop()
 
-    if st.button("🧠 Gerar Currículo ATS", use_container_width=True):
+    # MATCH
+    score, palavras = calcular_match(cv_texto, vaga["description"])
 
-        with st.spinner("IA adaptando estrategicamente..."):
+    st.subheader("Match com a vaga")
+    st.metric("Compatibilidade estimada", f"{score}%")
+    st.write("Palavras em comum:", ", ".join(palavras))
 
-            prompt = f"""
-Rewrite ONLY the SUMMARY section to better align with the job description.
+    if st.button("Gerar Versão ATS"):
 
-Do NOT invent experience.
-Do NOT modify employment history.
-Keep ATS-friendly plain text format.
+        prompt = f"""
+Rewrite ONLY the SUMMARY section of the resume to better align with the job description.
 
-ORIGINAL CV:
-{perfil_base}
+Do NOT:
+- Invent experience
+- Modify employment history
+- Add new technologies
 
-JOB DESCRIPTION:
-{vaga['description']}
+Keep it ATS friendly.
+Return plain text.
+
+RESUME:
+{cv_texto}
+
+JOB:
+{vaga["description"]}
 """
 
-            resp = client.models.generate_content(
-                model="gemini-2.0-flash",
-                contents=prompt
-            )
+        resp = client.models.generate_content(
+            model="gemini-2.0-flash",
+            contents=prompt
+        )
 
-            texto_final = resp.text
+        texto_final = resp.text
 
-            st.text_area("Resultado ATS:", texto_final, height=500)
+        st.text_area("Currículo ATS", texto_final, height=500)
 
-            # DOWNLOAD WORD
-            st.download_button(
-                "⬇️ Baixar em Word (.docx)",
-                gerar_docx(texto_final),
-                "Carlos_Ribeiro_ATS.docx"
-            )
-
-            # DOWNLOAD PDF
-            st.download_button(
-                "⬇️ Baixar em PDF",
-                gerar_pdf(texto_final),
-                "Carlos_Ribeiro_ATS.pdf"
-            )
+        st.download_button(
+            "Baixar em Word",
+            gerar_docx(texto_final),
+            "Carlos_Ribeiro_ATS.docx"
+        )
