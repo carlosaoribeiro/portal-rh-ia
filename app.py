@@ -65,14 +65,11 @@ def agente_explorer_vagas(cargo, local):
 
         for job in jobs:
 
-            # ===== Link Principal =====
             link = None
 
-            # 1) related_links
             if job.get("related_links"):
                 link = job["related_links"][0].get("link")
 
-            # 2) apply_options
             if not link and job.get("apply_options"):
                 link = job["apply_options"][0].get("link")
 
@@ -104,16 +101,27 @@ modo = st.sidebar.radio(
 st.sidebar.divider()
 st.sidebar.subheader("Sincronizar Perfil")
 
-matrix_input = st.sidebar.file_uploader("Enviar Matriz JSON", type=["json"])
+# ✅ AGORA ACEITA JSON, PDF, DOC, DOCX
+uploaded_file = st.sidebar.file_uploader(
+    "Enviar Arquivo (JSON, PDF, DOC, DOCX)",
+    type=["json", "pdf", "doc", "docx"]
+)
 
-if matrix_input:
-    matrix_data = json.load(matrix_input)
-    conn.execute(
-        "INSERT OR REPLACE INTO user_profile (id, matrix_json, last_updated) VALUES (1, ?, datetime('now'))",
-        (json.dumps(matrix_data),)
-    )
-    conn.commit()
-    st.sidebar.success("✅ Perfil salvo!")
+if uploaded_file:
+
+    # Se for JSON → salva no banco
+    if uploaded_file.type == "application/json":
+        matrix_data = json.load(uploaded_file)
+        conn.execute(
+            "INSERT OR REPLACE INTO user_profile (id, matrix_json, last_updated) VALUES (1, ?, datetime('now'))",
+            (json.dumps(matrix_data),)
+        )
+        conn.commit()
+        st.sidebar.success("✅ Matriz JSON salva!")
+
+    # Se for PDF ou Word → apenas aceita
+    else:
+        st.sidebar.success("📄 Arquivo de currículo recebido com sucesso!")
 
 # ==========================================
 # BUSCAR VAGAS
@@ -149,13 +157,11 @@ if modo == "🔍 Buscar Vagas":
                     st.markdown(f"**Empresa:** {v['company']}")
                     st.markdown(f"📍 {v['location']}")
 
-                    # ===== Link Principal =====
                     if v["link"]:
                         st.markdown(f"🔗 [Abrir Vaga Principal]({v['link']})")
                     else:
                         st.warning("⚠️ Link principal não disponível.")
 
-                    # ===== Múltiplos Apply Buttons =====
                     if v["apply_options"]:
                         st.markdown("**Candidatar-se via:**")
                         for opt in v["apply_options"]:
