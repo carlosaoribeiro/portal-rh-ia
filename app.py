@@ -9,6 +9,7 @@ from docx import Document
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib.pagesizes import letter
+from pypdf import PdfReader  # ✅ CORRETO
 
 # ==========================================
 # CONFIGURAÇÃO
@@ -50,11 +51,11 @@ conn = init_db()
 # EXTRAIR TEXTO DE PDF/DOCX
 # ==========================================
 import docx
-import PyPDF2
 
 def extrair_texto_arquivo(uploaded_file):
+
     if uploaded_file.type == "application/pdf":
-        reader = PyPDF2.PdfReader(uploaded_file)
+        reader = PdfReader(uploaded_file)  # ✅ USANDO pypdf
         texto = ""
         for page in reader.pages:
             texto += page.extract_text() or ""
@@ -177,7 +178,7 @@ if uploaded_file:
     else:
         texto_cv = extrair_texto_arquivo(uploaded_file)
         st.session_state["cv_text"] = texto_cv
-        st.sidebar.success("📄 Currículo carregado e pronto para adaptação!")
+        st.sidebar.success("📄 Currículo carregado!")
 
 # ==========================================
 # BUSCAR VAGAS
@@ -199,10 +200,6 @@ if modo == "🔍 Buscar Vagas":
 
         vagas, logs = agente_explorer_vagas(cargo, local)
 
-        with st.expander("📝 Logs Técnicos"):
-            for l in logs:
-                st.text(l)
-
         if vagas:
             st.success(f"🎯 {len(vagas)} vagas listadas!")
 
@@ -214,17 +211,7 @@ if modo == "🔍 Buscar Vagas":
                     st.markdown(f"📍 {v['location']}")
 
                     if v["link"]:
-                        st.markdown(f"🔗 [Abrir Vaga Principal]({v['link']})")
-
-                    if v["apply_options"]:
-                        st.markdown("**Candidatar-se via:**")
-                        for opt in v["apply_options"]:
-                            nome = opt.get("title", "Portal")
-                            link_apply = opt.get("link")
-                            if link_apply:
-                                st.markdown(f"- [{nome}]({link_apply})")
-
-                    st.write(v["description"][:600] + "...")
+                        st.markdown(f"[Abrir Vaga Principal]({v['link']})")
 
                     if st.button(f"Selecionar Vaga #{i+1}", key=f"vaga_{i}"):
                         st.session_state["vaga_ativa"] = v
@@ -246,43 +233,22 @@ elif modo == "📄 Adaptar Currículo":
         st.warning("⚠️ Selecione uma vaga primeiro.")
         st.stop()
 
-    perfil_base = None
-
-    if st.session_state.get("cv_text"):
-        perfil_base = st.session_state["cv_text"]
-    else:
-        row = conn.execute("SELECT matrix_json FROM user_profile WHERE id = 1").fetchone()
-        if row:
-            perfil_base = row[0]
+    perfil_base = st.session_state.get("cv_text")
 
     if not perfil_base:
-        st.warning("⚠️ Envie seu currículo (JSON ou PDF/DOC) primeiro.")
+        st.warning("⚠️ Envie seu currículo primeiro.")
         st.stop()
-
-    st.subheader("📌 Vaga Selecionada")
-    st.write(f"**{vaga['title']} – {vaga['company']}**")
 
     if st.button("🧠 Gerar Currículo ATS", use_container_width=True):
 
         with st.spinner("IA adaptando estrategicamente..."):
 
             prompt = f"""
-You are an ATS resume optimizer.
-
 Rewrite ONLY the SUMMARY section to better align with the job description.
 
-You may:
-- Reorganize bullet points
-- Emphasize relevant keywords
-- Improve clarity and impact
-
-You must NOT:
-- Invent experience
-- Change dates
-- Add new technologies
-- Modify employment history
-
-Return plain text resume (ATS friendly).
+Do NOT invent experience.
+Do NOT modify employment history.
+Keep ATS-friendly plain text format.
 
 ORIGINAL CV:
 {perfil_base}
@@ -298,23 +264,18 @@ JOB DESCRIPTION:
 
             texto_final = resp.text
 
-            st.success("✅ Currículo otimizado!")
             st.text_area("Resultado ATS:", texto_final, height=500)
 
             # DOWNLOAD WORD
-            docx_file = gerar_docx(texto_final)
             st.download_button(
                 "⬇️ Baixar em Word (.docx)",
-                data=docx_file,
-                file_name="Carlos_Ribeiro_ATS.docx",
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                gerar_docx(texto_final),
+                "Carlos_Ribeiro_ATS.docx"
             )
 
             # DOWNLOAD PDF
-            pdf_file = gerar_pdf(texto_final)
             st.download_button(
                 "⬇️ Baixar em PDF",
-                data=pdf_file,
-                file_name="Carlos_Ribeiro_ATS.pdf",
-                mime="application/pdf"
+                gerar_pdf(texto_final),
+                "Carlos_Ribeiro_ATS.pdf"
             )
