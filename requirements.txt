@@ -2,6 +2,5 @@ streamlit>=1.52,<2
 google-genai>=1.56,<2
 requests
 python-docx
-reportlab
 pypdf
 duckduckgo-search>=7.3.0
