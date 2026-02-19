@@ -21,7 +21,7 @@ if "SERPAPI_KEY" not in st.secrets:
 client = genai.Client(api_key=st.secrets["GOOGLE_API_KEY"])
 
 # ==========================================
-# SESSION CONTROL
+# CONTROLE DE NAVEGAÇÃO
 # ==========================================
 if "step" not in st.session_state:
     st.session_state.step = 1
@@ -94,7 +94,7 @@ def calcular_match(cv, vaga):
     return min(score, 100)
 
 # ==========================================
-# TELA 1 – BUSCAR
+# TELA 1 – BUSCAR VAGAS
 # ==========================================
 if st.session_state.step == 1:
 
@@ -123,7 +123,7 @@ if st.session_state.step == 1:
                     st.rerun()
 
 # ==========================================
-# TELA 2 – DETALHES
+# TELA 2 – DETALHES DA VAGA
 # ==========================================
 elif st.session_state.step == 2:
 
@@ -145,7 +145,7 @@ elif st.session_state.step == 2:
         st.rerun()
 
 # ==========================================
-# TELA 3 – ADAPTAR CV
+# TELA 3 – ADAPTAR CURRÍCULO
 # ==========================================
 elif st.session_state.step == 3:
 
@@ -167,34 +167,42 @@ elif st.session_state.step == 3:
 
         if st.button("Gerar Versão ATS"):
 
+            # 🔥 LIMITAR TEXTO PARA NÃO ESTOURAR GEMINI
+            cv_limitado = st.session_state.cv_texto[:4000]
+            vaga_limitada = vaga["description"][:2000]
+
             prompt = f"""
 Rewrite ONLY the SUMMARY section to better align with the job description.
 
 Do NOT invent experience.
 Do NOT change dates or companies.
-Keep ATS friendly.
+Keep ATS friendly plain text.
 
 RESUME:
-{st.session_state.cv_texto}
+{cv_limitado}
 
 JOB:
-{vaga["description"]}
+{vaga_limitada}
 """
 
-            resp = client.models.generate_content(
-                model="gemini-2.0-flash",
-                contents=prompt
-            )
+            try:
+                resp = client.models.generate_content(
+                    model="gemini-1.5-flash",
+                    contents=prompt
+                )
 
-            texto_final = resp.text
+                texto_final = resp.text
 
-            st.text_area("Versão ATS", texto_final, height=500)
+                st.text_area("Versão ATS", texto_final, height=500)
 
-            st.download_button(
-                "Baixar Word",
-                gerar_docx(texto_final),
-                "CV_ATS.docx"
-            )
+                st.download_button(
+                    "Baixar Word",
+                    gerar_docx(texto_final),
+                    "CV_ATS.docx"
+                )
+
+            except Exception as e:
+                st.error("Erro ao gerar conteúdo. Verifique limite ou chave API.")
 
     if st.button("Voltar para vagas"):
         st.session_state.step = 1
