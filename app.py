@@ -1,103 +1,36 @@
 import streamlit as st
-import json
-import sqlite3
 import requests
 from google import genai
-from datetime import datetime
 from io import BytesIO
 from docx import Document
 from pypdf import PdfReader
 
 # ==========================================
-# CONFIGURAÇÃO
+# CONFIG
 # ==========================================
-st.set_page_config(page_title="Agente de Carreira AI", layout="wide", page_icon="🚀")
+st.set_page_config(page_title="Portal RH IA", layout="wide")
 
-# ==========================================
-# VALIDAÇÃO DE CHAVES
-# ==========================================
 if "GOOGLE_API_KEY" not in st.secrets:
-    st.error("Configure GOOGLE_API_KEY no Streamlit Secrets.")
+    st.error("Configure GOOGLE_API_KEY.")
     st.stop()
 
 if "SERPAPI_KEY" not in st.secrets:
-    st.error("Configure SERPAPI_KEY no Streamlit Secrets.")
+    st.error("Configure SERPAPI_KEY.")
     st.stop()
 
 client = genai.Client(api_key=st.secrets["GOOGLE_API_KEY"])
 
 # ==========================================
-# BANCO
+# SESSION CONTROL
 # ==========================================
-def init_db():
-    conn = sqlite3.connect("career_agent.db", check_same_thread=False)
-    c = conn.cursor()
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS user_profile (
-            id INTEGER PRIMARY KEY,
-            matrix_json TEXT,
-            last_updated DATETIME
-        )
-    """)
-    conn.commit()
-    return conn
-
-conn = init_db()
+if "step" not in st.session_state:
+    st.session_state.step = 1
 
 # ==========================================
-# EXTRAIR TEXTO
-# ==========================================
-def extrair_texto(uploaded_file):
-
-    if uploaded_file.type == "application/pdf":
-        reader = PdfReader(uploaded_file)
-        texto = ""
-        for page in reader.pages:
-            texto += page.extract_text() or ""
-        return texto
-
-    elif uploaded_file.type in [
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        "application/msword"
-    ]:
-        doc = Document(uploaded_file)
-        return "\n".join([p.text for p in doc.paragraphs])
-
-    return None
-
-# ==========================================
-# GERAR DOCX
-# ==========================================
-def gerar_docx(texto):
-    doc = Document()
-    for linha in texto.split("\n"):
-        doc.add_paragraph(linha)
-    buffer = BytesIO()
-    doc.save(buffer)
-    buffer.seek(0)
-    return buffer
-
-# ==========================================
-# MATCH SIMPLES
-# ==========================================
-def calcular_match(cv_texto, vaga_texto):
-    cv_words = set(cv_texto.lower().split())
-    vaga_words = set(vaga_texto.lower().split())
-    intersecao = cv_words.intersection(vaga_words)
-
-    if len(vaga_words) == 0:
-        return 0, []
-
-    score = int((len(intersecao) / len(vaga_words)) * 100)
-    return min(score, 100), list(intersecao)[:20]
-
-# ==========================================
-# BUSCA VAGAS
+# FUNÇÕES
 # ==========================================
 def buscar_vagas(cargo, local):
-
     url = "https://serpapi.com/search.json"
-
     params = {
         "engine": "google_jobs",
         "q": f"{cargo} {local}",
@@ -121,33 +54,49 @@ def buscar_vagas(cargo, local):
 
     return vagas
 
+
+def extrair_texto(uploaded_file):
+    if uploaded_file.type == "application/pdf":
+        reader = PdfReader(uploaded_file)
+        texto = ""
+        for page in reader.pages:
+            texto += page.extract_text() or ""
+        return texto
+
+    elif uploaded_file.type in [
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/msword"
+    ]:
+        doc = Document(uploaded_file)
+        return "\n".join([p.text for p in doc.paragraphs])
+
+    return None
+
+
+def gerar_docx(texto):
+    doc = Document()
+    for linha in texto.split("\n"):
+        doc.add_paragraph(linha)
+    buffer = BytesIO()
+    doc.save(buffer)
+    buffer.seek(0)
+    return buffer
+
+
+def calcular_match(cv, vaga):
+    cv_words = set(cv.lower().split())
+    vaga_words = set(vaga.lower().split())
+
+    if len(vaga_words) == 0:
+        return 0
+
+    score = int((len(cv_words.intersection(vaga_words)) / len(vaga_words)) * 100)
+    return min(score, 100)
+
 # ==========================================
-# SIDEBAR
+# TELA 1 – BUSCAR
 # ==========================================
-st.sidebar.title("Agent Command Center")
-
-modo = st.sidebar.radio(
-    "Módulo:",
-    ["Buscar Vagas", "Adaptar Currículo"]
-)
-
-st.sidebar.divider()
-st.sidebar.subheader("Enviar Currículo")
-
-uploaded_file = st.sidebar.file_uploader(
-    "PDF ou Word",
-    type=["pdf", "doc", "docx"]
-)
-
-if uploaded_file:
-    texto_cv = extrair_texto(uploaded_file)
-    st.session_state["cv_text"] = texto_cv
-    st.sidebar.success("Currículo carregado!")
-
-# ==========================================
-# BUSCAR VAGAS
-# ==========================================
-if modo == "Buscar Vagas":
+if st.session_state.step == 1:
 
     st.header("Buscar Vagas")
 
@@ -157,76 +106,96 @@ if modo == "Buscar Vagas":
     if st.button("Buscar"):
 
         vagas = buscar_vagas(cargo, local)
+        st.session_state.vagas = vagas
 
-        if vagas:
-            for i, v in enumerate(vagas):
-                with st.container(border=True):
-                    st.subheader(v["title"])
-                    st.write(v["company"])
-                    st.write(v["location"])
+    if "vagas" in st.session_state:
 
-                    if st.button(f"Selecionar Vaga {i}", key=i):
-                        st.session_state["vaga_ativa"] = v
-                        st.success("Vaga selecionada!")
-        else:
-            st.warning("Nenhuma vaga encontrada.")
+        for i, v in enumerate(st.session_state.vagas):
+
+            with st.container(border=True):
+                st.subheader(v["title"])
+                st.write(v["company"])
+                st.write(v["location"])
+
+                if st.button(f"Selecionar Vaga {i}", key=i):
+                    st.session_state.vaga_ativa = v
+                    st.session_state.step = 2
+                    st.rerun()
 
 # ==========================================
-# ADAPTAR CURRÍCULO
+# TELA 2 – DETALHES
 # ==========================================
-elif modo == "Adaptar Currículo":
+elif st.session_state.step == 2:
 
-    st.header("Adaptador Inteligente")
+    vaga = st.session_state.vaga_ativa
 
-    vaga = st.session_state.get("vaga_ativa")
-    cv_texto = st.session_state.get("cv_text")
+    st.header("Detalhes da Vaga")
 
-    if not vaga:
-        st.warning("Selecione uma vaga primeiro.")
-        st.stop()
+    st.subheader(vaga["title"])
+    st.write(vaga["company"])
+    st.write(vaga["location"])
+    st.write(vaga["description"])
 
-    if not cv_texto:
-        st.warning("Envie seu currículo primeiro.")
-        st.stop()
+    if st.button("Continuar para adaptar currículo"):
+        st.session_state.step = 3
+        st.rerun()
 
-    # MATCH
-    score, palavras = calcular_match(cv_texto, vaga["description"])
+    if st.button("Voltar"):
+        st.session_state.step = 1
+        st.rerun()
 
-    st.subheader("Match com a vaga")
-    st.metric("Compatibilidade estimada", f"{score}%")
-    st.write("Palavras em comum:", ", ".join(palavras))
+# ==========================================
+# TELA 3 – ADAPTAR CV
+# ==========================================
+elif st.session_state.step == 3:
 
-    if st.button("Gerar Versão ATS"):
+    vaga = st.session_state.vaga_ativa
 
-        prompt = f"""
-Rewrite ONLY the SUMMARY section of the resume to better align with the job description.
+    st.header("Adaptar Currículo")
 
-Do NOT:
-- Invent experience
-- Modify employment history
-- Add new technologies
+    uploaded_file = st.file_uploader("Enviar CV (PDF ou Word)", type=["pdf", "doc", "docx"])
 
-Keep it ATS friendly.
-Return plain text.
+    if uploaded_file:
+        texto_cv = extrair_texto(uploaded_file)
+        st.session_state.cv_texto = texto_cv
+        st.success("Currículo carregado!")
+
+    if "cv_texto" in st.session_state:
+
+        score = calcular_match(st.session_state.cv_texto, vaga["description"])
+        st.metric("Compatibilidade estimada", f"{score}%")
+
+        if st.button("Gerar Versão ATS"):
+
+            prompt = f"""
+Rewrite ONLY the SUMMARY section to better align with the job description.
+
+Do NOT invent experience.
+Do NOT change dates or companies.
+Keep ATS friendly.
 
 RESUME:
-{cv_texto}
+{st.session_state.cv_texto}
 
 JOB:
 {vaga["description"]}
 """
 
-        resp = client.models.generate_content(
-            model="gemini-2.0-flash",
-            contents=prompt
-        )
+            resp = client.models.generate_content(
+                model="gemini-2.0-flash",
+                contents=prompt
+            )
 
-        texto_final = resp.text
+            texto_final = resp.text
 
-        st.text_area("Currículo ATS", texto_final, height=500)
+            st.text_area("Versão ATS", texto_final, height=500)
 
-        st.download_button(
-            "Baixar em Word",
-            gerar_docx(texto_final),
-            "Carlos_Ribeiro_ATS.docx"
-        )
+            st.download_button(
+                "Baixar Word",
+                gerar_docx(texto_final),
+                "CV_ATS.docx"
+            )
+
+    if st.button("Voltar para vagas"):
+        st.session_state.step = 1
+        st.rerun()
