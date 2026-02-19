@@ -3,4 +3,3 @@ google-genai>=1.56,<2
 requests
 python-docx
 pypdf
-duckduckgo-search>=7.3.0
