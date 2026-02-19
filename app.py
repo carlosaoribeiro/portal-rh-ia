@@ -167,7 +167,6 @@ elif st.session_state.step == 3:
 
         if st.button("Gerar Versão ATS"):
 
-            # 🔥 LIMITAR TEXTO PARA NÃO ESTOURAR GEMINI
             cv_limitado = st.session_state.cv_texto[:4000]
             vaga_limitada = vaga["description"][:2000]
 
@@ -186,12 +185,17 @@ JOB:
 """
 
             try:
-                resp = client.models.generate_content(
+                response = client.models.generate_content(
                     model="gemini-1.5-flash",
-                    contents=prompt
+                    contents=[
+                        {
+                            "role": "user",
+                            "parts": [{"text": prompt}]
+                        }
+                    ]
                 )
 
-                texto_final = resp.text
+                texto_final = response.candidates[0].content.parts[0].text
 
                 st.text_area("Versão ATS", texto_final, height=500)
 
@@ -201,7 +205,7 @@ JOB:
                     "CV_ATS.docx"
                 )
 
-            except Exception as e:
+            except Exception:
                 st.error("Erro ao gerar conteúdo. Verifique limite ou chave API.")
 
     if st.button("Voltar para vagas"):
