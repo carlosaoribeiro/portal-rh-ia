@@ -23,7 +23,7 @@ try:
     client = genai.Client(api_key=st.secrets["GOOGLE_API_KEY"])
     # Teste rápido para validar chave
     client.models.generate_content(
-        model="gemini-2.0-flash",
+        model="gemini-1.5-flash",
         contents="Ping"
     )
 except Exception as e:
