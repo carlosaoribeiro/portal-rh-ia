@@ -18,10 +18,10 @@ if "SERPAPI_KEY" not in st.secrets:
     st.error("SERPAPI_KEY não configurada no Secrets.")
     st.stop()
 
-# Inicializa cliente Gemini
+# Inicializa cliente Gemini (Versão Novo SDK google-genai)
 try:
     client = genai.Client(api_key=st.secrets["GOOGLE_API_KEY"])
-    # Teste rápido para validar chave
+    # Teste rápido para validar chave - Corrigido para o formato do novo SDK
     client.models.generate_content(
         model="gemini-1.5-flash",
         contents="Ping"
@@ -45,7 +45,7 @@ def buscar_vagas(cargo, local):
         params = {
             "engine": "google_jobs",
             "q": f"{cargo} {local}",
-            "hl": "en",
+            "hl": "pt",
             "api_key": st.secrets["SERPAPI_KEY"]
         }
 
@@ -136,6 +136,7 @@ JOB:
 {vaga_limitada}
 """
 
+    # Chamada corrigida para o SDK google-genai
     response = client.models.generate_content(
         model="gemini-1.5-flash",
         contents=prompt
@@ -161,8 +162,8 @@ if st.session_state.step == 1:
         for i, v in enumerate(st.session_state.vagas):
             with st.container(border=True):
                 st.subheader(v["title"])
-                st.write(v["company"])
-                st.write(v["location"])
+                st.write(f"Empresa: {v['company']}")
+                st.write(f"Local: {v['location']}")
 
                 if st.button("Selecionar Vaga", key=f"vaga_{i}"):
                     st.session_state.vaga_ativa = v
@@ -178,17 +179,20 @@ elif st.session_state.step == 2:
 
     st.header("Detalhes da Vaga")
     st.subheader(vaga["title"])
-    st.write(vaga["company"])
-    st.write(vaga["location"])
+    st.write(f"**Empresa:** {vaga['company']}")
+    st.write(f"**Local:** {vaga['location']}")
+    st.write("---")
     st.write(vaga["description"])
 
-    if st.button("Continuar para adaptar currículo"):
-        st.session_state.step = 3
-        st.rerun()
-
-    if st.button("Voltar"):
-        st.session_state.step = 1
-        st.rerun()
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("Continuar para adaptar currículo", use_container_width=True):
+            st.session_state.step = 3
+            st.rerun()
+    with col2:
+        if st.button("Voltar", use_container_width=True):
+            st.session_state.step = 1
+            st.rerun()
 
 # ==========================================
 # TELA 3 – ADAPTAR CURRÍCULO
@@ -214,22 +218,24 @@ elif st.session_state.step == 3:
 
         if st.button("Gerar Versão ATS"):
             try:
-                texto_final = gerar_ats(st.session_state.cv_texto, vaga["description"])
+                with st.spinner("IA otimizando seu resumo..."):
+                    texto_final = gerar_ats(st.session_state.cv_texto, vaga["description"])
 
-                if not texto_final:
-                    st.error("Resposta vazia da API.")
-                else:
-                    st.text_area("Versão ATS", texto_final, height=500)
+                    if not texto_final:
+                        st.error("Resposta vazia da API.")
+                    else:
+                        st.text_area("Versão ATS Gerada", texto_final, height=500)
 
-                    st.download_button(
-                        "Baixar Word",
-                        gerar_docx(texto_final),
-                        "CV_ATS.docx"
-                    )
+                        st.download_button(
+                            "Baixar Word (.docx)",
+                            gerar_docx(texto_final),
+                            "CV_ATS_Otimizado.docx",
+                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                        )
 
             except Exception as e:
                 st.error(f"Erro ao gerar conteúdo: {str(e)}")
 
-    if st.button("Voltar para vagas"):
+    if st.button("Voltar para busca"):
         st.session_state.step = 1
         st.rerun()
