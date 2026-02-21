@@ -25,7 +25,7 @@ try:
     
     # Validação inicial com o nome de modelo correto para evitar 404
     client.models.generate_content(
-        model="gemini-1.5-flash",
+        model="gemini-1.5-pro-latest",
         contents="Ping"
     )
 except Exception as e:
