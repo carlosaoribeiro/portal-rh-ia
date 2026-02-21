@@ -18,10 +18,12 @@ if "SERPAPI_KEY" not in st.secrets:
     st.error("SERPAPI_KEY não configurada no Secrets.")
     st.stop()
 
-# Inicializa cliente Gemini (Versão Novo SDK google-genai)
+# Inicializa cliente Gemini
 try:
+    # Usando o novo SDK google-genai
     client = genai.Client(api_key=st.secrets["GOOGLE_API_KEY"])
-    # Teste rápido para validar chave - Corrigido para o formato do novo SDK
+    
+    # Validação inicial com o nome de modelo correto para evitar 404
     client.models.generate_content(
         model="gemini-1.5-flash",
         contents="Ping"
@@ -123,20 +125,18 @@ def gerar_ats(cv_texto, vaga_desc):
     vaga_limitada = vaga_desc[:2000]
 
     prompt = f"""
-Rewrite ONLY the SUMMARY section to better align with the job description.
-
-Do NOT invent experience.
-Do NOT change dates or companies.
-Keep ATS friendly plain text.
+Rewrite ONLY the SUMMARY section of the resume to better align with the job description.
+Do NOT invent experience. Do NOT change dates or companies.
+Keep it as ATS friendly plain text.
 
 RESUME:
 {cv_limitado}
 
-JOB:
+JOB DESCRIPTION:
 {vaga_limitada}
 """
 
-    # Chamada corrigida para o SDK google-genai
+    # Chamada corrigida
     response = client.models.generate_content(
         model="gemini-1.5-flash",
         contents=prompt
@@ -224,7 +224,7 @@ elif st.session_state.step == 3:
                     if not texto_final:
                         st.error("Resposta vazia da API.")
                     else:
-                        st.text_area("Versão ATS Gerada", texto_final, height=500)
+                        st.text_area("Versão ATS Gerada", texto_final, height=400)
 
                         st.download_button(
                             "Baixar Word (.docx)",
