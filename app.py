@@ -1,30 +1,23 @@
 import streamlit as st
 import requests
-from google import genai
+import google.generativeai as palmlib  # Usando a lib estável
 from io import BytesIO
 from docx import Document
 from pypdf import PdfReader
 
-# Configuração de página
 st.set_page_config(page_title="Portal RH IA", layout="wide")
 
-# Inicialização da API com tratamento de erro direto
+# Configuração da API Estável
 try:
-    # O .strip() remove espaços ou quebras de linha que vimos no seu print
-    api_key = st.secrets["GOOGLE_API_KEY"].strip()
-    client = genai.Client(api_key=api_key)
+    api_key = st.secrets["GOOGLE_API_KEY"].strip().replace('"', '')
+    palmlib.configure(api_key=api_key)
     
-    # Nome de modelo oficial e estável para evitar o 404
-    MODEL_ID = "gemini-1.5-flash"
-    
-    # Teste de validação silencioso
-    client.models.generate_content(model=MODEL_ID, contents="teste")
+    # Tenta o flash, se não existir na sua região/chave, ele avisa
+    model = palmlib.GenerativeModel('gemini-1.5-flash')
 except Exception as e:
-    st.error(f"ERRO DE CONFIGURAÇÃO: {e}")
-    st.info("Dica: Verifique se sua chave no Secrets não tem aspas duplas dentro de aspas duplas.")
+    st.error(f"Erro ao configurar API: {e}")
     st.stop()
 
-# Controle de Navegação
 if "step" not in st.session_state:
     st.session_state.step = 1
 
@@ -35,7 +28,7 @@ def buscar_vagas(cargo, local):
         params = {
             "engine": "google_jobs",
             "q": f"{cargo} {local}",
-            "api_key": st.secrets["SERPAPI_KEY"].strip()
+            "api_key": st.secrets["SERPAPI_KEY"].strip().replace('"', '')
         }
         r = requests.get(url, params=params, timeout=10)
         return r.json().get("jobs_results", [])
@@ -51,55 +44,44 @@ def extrair_texto(file):
         return ""
 
 # --- INTERFACE ---
-
 if st.session_state.step == 1:
-    st.header("1. Pesquisar Oportunidades")
-    col1, col2 = st.columns(2)
-    cargo = col1.text_input("Cargo desejado:", "Android Developer")
-    local = col2.text_input("Localização:", "Remoto")
+    st.header("1. Buscar Vagas")
+    c1, c2 = st.columns(2)
+    cargo = c1.text_input("Cargo:", "Android Developer")
+    local = c2.text_input("Local:", "Remoto")
     
-    if st.button("Buscar Vagas"):
-        with st.spinner("Consultando Google Jobs..."):
-            st.session_state.vagas = buscar_vagas(cargo, local)
+    if st.button("Buscar"):
+        st.session_state.vagas = buscar_vagas(cargo, local)
     
     if "vagas" in st.session_state:
         for i, v in enumerate(st.session_state.vagas):
             with st.container(border=True):
-                st.subheader(v.get('title'))
-                st.write(f"**Empresa:** {v.get('company_name')} | **Local:** {v.get('location')}")
-                if st.button("Trabalhar nesta vaga", key=f"btn_{i}"):
+                st.write(f"**{v.get('title')}** - {v.get('company_name')}")
+                if st.button("Selecionar", key=f"v_{i}"):
                     st.session_state.vaga_ativa = v
                     st.session_state.step = 2
                     st.rerun()
 
 elif st.session_state.step == 2:
     vaga = st.session_state.vaga_ativa
-    st.header("2. Otimização de Currículo")
-    st.write(f"Vaga selecionada: **{vaga.get('title')}**")
+    st.header("2. Otimizar CV")
+    st.write(f"Vaga: {vaga.get('title')}")
     
-    upload = st.file_uploader("Suba seu CV (PDF ou DOCX)", type=["pdf", "docx"])
+    upload = st.file_uploader("Suba seu CV", type=["pdf", "docx"])
     
-    if upload:
-        if st.button("GERAR RESUMO OTIMIZADO"):
-            with st.spinner("IA processando..."):
-                texto_cv = extrair_texto(upload)
-                desc_vaga = vaga.get('description', '')
-                
-                prompt = (
-                    f"Atue como um especialista em RH. Realeje o resumo profissional do currículo abaixo "
-                    f"para dar match com a descrição da vaga. Mantenha a verdade, mas use palavras-chave da vaga.\n\n"
-                    f"DESCRIÇÃO DA VAGA:\n{desc_vaga[:2000]}\n\n"
-                    f"CURRÍCULO ATUAL:\n{texto_cv[:3000]}"
-                )
-                
-                try:
-                    res = client.models.generate_content(model=MODEL_ID, contents=prompt)
-                    st.success("Resumo Otimizado com Sucesso!")
-                    st.markdown("---")
-                    st.write(res.text)
-                except Exception as e:
-                    st.error(f"Erro na IA: {e}")
+    if upload and st.button("GERAR RESUMO"):
+        with st.spinner("IA processando..."):
+            texto_cv = extrair_texto(upload)
+            prompt = f"Otimize o resumo deste CV para esta vaga. CV: {texto_cv[:2500]} Vaga: {vaga.get('description', '')[:1500]}"
+            
+            try:
+                # Método de geração da lib estável
+                response = model.generate_content(prompt)
+                st.subheader("Resultado:")
+                st.write(response.text)
+            except Exception as e:
+                st.error(f"Erro na IA: {e}")
     
-    if st.button("Voltar para busca"):
+    if st.button("Voltar"):
         st.session_state.step = 1
         st.rerun()
