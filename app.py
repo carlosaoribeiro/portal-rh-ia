@@ -1,5 +1,7 @@
 import streamlit as st
 import requests
+from io import BytesIO
+from docx import Document
 
 st.set_page_config(page_title="Portal RH IA", layout="wide")
 
@@ -38,7 +40,6 @@ def extrair_texto(file):
             reader = PdfReader(file)
             return "".join(page.extract_text() or "" for page in reader.pages)
         else:
-            from docx import Document
             doc = Document(file)
             return "\n".join(p.text for p in doc.paragraphs)
     except:
@@ -63,6 +64,17 @@ def calcular_score(skills_vaga, skills_cv):
 
     score = (len(match) / len(skills_vaga)) * 100
     return round(score, 2), list(match), list(faltantes)
+
+
+def gerar_docx(texto):
+    doc = Document()
+    for linha in texto.split("\n"):
+        doc.add_paragraph(linha)
+
+    buffer = BytesIO()
+    doc.save(buffer)
+    buffer.seek(0)
+    return buffer
 
 
 # --------------------
@@ -125,6 +137,30 @@ elif st.session_state.step == 2:
 
         st.write("### Skills faltantes")
         st.write(faltantes)
+
+        # -------- NOVA PARTE --------
+
+        if score > 0:
+            texto_adaptado = f"""
+Currículo Adaptado para a vaga de {vaga.get("title")}
+
+Resumo Profissional:
+Profissional com experiência em {", ".join(match)}.
+Perfil alinhado com os requisitos da vaga.
+
+Skills Principais:
+{", ".join(match)}
+
+"""
+
+            arquivo_docx = gerar_docx(texto_adaptado)
+
+            st.download_button(
+                label="📥 Baixar CV Adaptado",
+                data=arquivo_docx,
+                file_name="CV_Adaptado.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            )
 
     if st.button("Voltar"):
         st.session_state.step = 1
