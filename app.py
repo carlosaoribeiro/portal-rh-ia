@@ -1,47 +1,30 @@
 import streamlit as st
 import requests
-import google.generativeai as genai
-from docx import Document
-from pypdf import PdfReader
 
 st.set_page_config(page_title="Portal RH IA", layout="wide")
 
-# ------------------------
-# CONFIG IA (sem travar boot)
-# ------------------------
-model = None
-api_key = st.secrets.get("GOOGLE_API_KEY")
-
-if api_key:
-    try:
-        genai.configure(api_key=api_key.strip())
-        model = genai.GenerativeModel("gemini-1.5-flash")
-    except Exception as e:
-        st.warning("Erro ao configurar IA. Rewrite ficará desativado.")
-
-# ------------------------
-# SESSION CONTROL
-# ------------------------
+# --------------------
+# SESSION
+# --------------------
 if "step" not in st.session_state:
     st.session_state.step = 1
 
-# ------------------------
+# --------------------
 # FUNÇÕES
-# ------------------------
+# --------------------
 
 def buscar_vagas(cargo, local):
-    try:
-        serp_key = st.secrets.get("SERPAPI_KEY")
-        if not serp_key:
-            return []
+    serp_key = st.secrets.get("SERPAPI_KEY")
+    if not serp_key:
+        return []
 
+    try:
         url = "https://serpapi.com/search.json"
         params = {
             "engine": "google_jobs",
             "q": f"{cargo} {local}",
-            "api_key": serp_key.strip()
+            "api_key": serp_key
         }
-
         r = requests.get(url, params=params, timeout=10)
         return r.json().get("jobs_results", [])
     except:
@@ -51,9 +34,11 @@ def buscar_vagas(cargo, local):
 def extrair_texto(file):
     try:
         if file.type == "application/pdf":
+            from pypdf import PdfReader
             reader = PdfReader(file)
             return "".join(page.extract_text() or "" for page in reader.pages)
         else:
+            from docx import Document
             doc = Document(file)
             return "\n".join(p.text for p in doc.paragraphs)
     except:
@@ -62,9 +47,8 @@ def extrair_texto(file):
 
 def extrair_skills(texto):
     tech_stack = [
-        "kotlin", "java", "compose", "firebase", "mvvm",
-        "hilt", "retrofit", "android", "sql", "git",
-        "clean architecture", "rest api"
+        "kotlin", "java", "compose", "firebase",
+        "mvvm", "hilt", "retrofit", "android"
     ]
     texto = texto.lower()
     return [skill for skill in tech_stack if skill in texto]
@@ -72,63 +56,57 @@ def extrair_skills(texto):
 
 def calcular_score(skills_vaga, skills_cv):
     if not skills_vaga:
-        return 0
+        return 0, [], []
 
     match = set(skills_vaga).intersection(set(skills_cv))
+    faltantes = set(skills_vaga) - set(skills_cv)
+
     score = (len(match) / len(skills_vaga)) * 100
-    return round(score, 2), list(match), list(set(skills_vaga) - set(skills_cv))
+    return round(score, 2), list(match), list(faltantes)
 
 
-# ------------------------
-# TELA 1 — BUSCA
-# ------------------------
+# --------------------
+# TELA 1
+# --------------------
 
 if st.session_state.step == 1:
 
+    st.title("Portal RH IA")
     st.header("🔍 Buscar Vagas")
 
-    c1, c2 = st.columns(2)
-    cargo = c1.text_input("Cargo", "Android Developer")
-    local = c2.text_input("Localidade", "Brasil")
+    cargo = st.text_input("Cargo", "Android Developer")
+    local = st.text_input("Localidade", "Brasil")
 
     if st.button("Buscar"):
-        with st.spinner("Buscando vagas..."):
+        with st.spinner("Buscando..."):
             st.session_state.vagas = buscar_vagas(cargo, local)
 
     if "vagas" in st.session_state:
+        for i, vaga in enumerate(st.session_state.vagas):
+            with st.container(border=True):
+                st.subheader(vaga.get("title"))
+                st.write(vaga.get("company_name"))
 
-        if not st.session_state.vagas:
-            st.warning("Nenhuma vaga encontrada.")
-        else:
-            for i, vaga in enumerate(st.session_state.vagas):
-                with st.container(border=True):
-                    st.subheader(vaga.get("title"))
-                    st.write(
-                        f"**Empresa:** {vaga.get('company_name')} | "
-                        f"**Local:** {vaga.get('location')}"
-                    )
-
-                    if st.button("Ver Detalhes", key=f"vaga_{i}"):
-                        st.session_state.vaga_ativa = vaga
-                        st.session_state.step = 2
-                        st.rerun()
+                if st.button("Selecionar", key=i):
+                    st.session_state.vaga_ativa = vaga
+                    st.session_state.step = 2
+                    st.rerun()
 
 
-# ------------------------
-# TELA 2 — DETALHE + SCORE
-# ------------------------
+# --------------------
+# TELA 2
+# --------------------
 
 elif st.session_state.step == 2:
 
     vaga = st.session_state.vaga_ativa
 
-    st.header("📄 Detalhes da Vaga")
-    st.subheader(vaga.get("title"))
-    st.write(vaga.get("description", "Descrição não disponível."))
+    st.header(vaga.get("title"))
+    st.write(vaga.get("description", ""))
 
     st.markdown("---")
 
-    upload = st.file_uploader("Upload do CV matriz (PDF ou DOCX)", type=["pdf", "docx"])
+    upload = st.file_uploader("Upload CV", type=["pdf", "docx"])
 
     if upload:
 
@@ -140,41 +118,13 @@ elif st.session_state.step == 2:
 
         score, match, faltantes = calcular_score(skills_vaga, skills_cv)
 
-        st.markdown("## 📊 Compatibilidade")
+        st.metric("Compatibilidade", f"{score}%")
 
-        st.metric("Match (%)", f"{score}%")
+        st.write("### Skills encontradas")
+        st.write(match)
 
-        st.write("### ✅ Skills encontradas")
-        st.write(match if match else "Nenhuma encontrada")
-
-        st.write("### ❌ Skills faltantes")
-        st.write(faltantes if faltantes else "Nenhuma")
-
-        st.markdown("---")
-
-        if score >= 60 and model:
-            if st.button("Gerar CV Otimizado com IA"):
-                with st.spinner("Gerando versão otimizada..."):
-                    prompt = f"""
-                    Reescreva o resumo profissional abaixo para alinhar com a vaga.
-                    Não invente experiências.
-
-                    VAGA:
-                    {desc_vaga[:3000]}
-
-                    CURRÍCULO:
-                    {texto_cv[:4000]}
-                    """
-
-                    try:
-                        response = model.generate_content(prompt)
-                        st.success("Versão otimizada:")
-                        st.write(response.text)
-                    except:
-                        st.error("Erro ao gerar conteúdo com IA.")
-
-        elif score < 60:
-            st.warning("Compatibilidade baixa. Avalie antes de otimizar.")
+        st.write("### Skills faltantes")
+        st.write(faltantes)
 
     if st.button("Voltar"):
         st.session_state.step = 1
