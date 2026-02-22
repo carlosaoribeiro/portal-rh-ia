@@ -93,16 +93,28 @@ if st.session_state.step == 1:
         with st.spinner("Buscando..."):
             st.session_state.vagas = buscar_vagas(cargo, local)
 
-    if "vagas" in st.session_state:
-        for i, vaga in enumerate(st.session_state.vagas):
-            with st.container(border=True):
-                st.subheader(vaga.get("title"))
-                st.write(vaga.get("company_name"))
+  if "vagas" in st.session_state:
+    for i, vaga in enumerate(st.session_state.vagas):
+        with st.container(border=True):
+            st.subheader(vaga.get("title"))
+            st.write(vaga.get("company_name"))
 
-                if st.button("Selecionar", key=i):
-                    st.session_state.vaga_ativa = vaga
-                    st.session_state.step = 2
-                    st.rerun()
+            # 🔽 NOVO - Captura do link
+            link_vaga = None
+
+            if "related_links" in vaga and vaga["related_links"]:
+                link_vaga = vaga["related_links"][0].get("link")
+
+            elif "link" in vaga:
+                link_vaga = vaga.get("link")
+
+            if link_vaga:
+                st.markdown(f"[🔗 Ver vaga original]({link_vaga})")
+
+            if st.button("Selecionar", key=i):
+                st.session_state.vaga_ativa = vaga
+                st.session_state.step = 2
+                st.rerun()
 
 
 # --------------------
